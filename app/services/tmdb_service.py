@@ -1,14 +1,14 @@
 from typing import List, Dict, Any, Optional
 import httpx
-from app.config import TMDB_API_KEY, TMDB_BASE_URL
+from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
 
 
 class TMDBService:
     def __init__(self):
-        self.api_key = TMDB_API_KEY
+        self.access_token = TMDB_READ_ACCESS_TOKEN
         self.base_url = TMDB_BASE_URL
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json;charset=utf-8"
         }
     
@@ -22,7 +22,7 @@ class TMDBService:
         if year:
             params["year"] = year
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 url, 
                 headers=self.headers, 
@@ -41,7 +41,7 @@ class TMDBService:
         """
         url = f"{self.base_url}/movie/{movie_id}"
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 url, 
                 headers=self.headers
@@ -61,6 +61,7 @@ class TMDBService:
         results = []
         
         for movie in movie_list:
+            print("fetching movie in tmdb with title", movie['title'])
             movie_data = None
             reason = movie.get('reason', '')
             

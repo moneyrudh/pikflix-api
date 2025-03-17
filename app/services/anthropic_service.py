@@ -1,12 +1,20 @@
 import json
 from typing import List
 import anthropic
+import httpx
 from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 
 
 class AnthropicService:
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # Create a custom httpx client without problematic options
+        http_client = httpx.Client(http2=True)
+        
+        # Initialize with custom client to avoid socket_options issue
+        self.client = anthropic.Anthropic(
+            api_key=ANTHROPIC_API_KEY,
+            http_client=http_client
+        )
         self.model = ANTHROPIC_MODEL
 
     async def get_movie_recommendations(self, query: str) -> List[dict]:
@@ -25,6 +33,9 @@ class AnthropicService:
         
         Do not include any other text in your response, just the JSON array.
         Make sure the results are diverse in terms of era, style, and popularity.
+        If the user searched for a specific movie or a prompt that warrants less than 9 movie responses, 
+        smartly recommend the remaining movies that are the closest match with the movie the user asked for.
+        The user may only require one movie, but you can recommend similar movies based on title, director, genre, etc.
         """
 
         user_message = f"Find me movies that match this description: {query}"
@@ -39,7 +50,7 @@ class AnthropicService:
             
             # Extract the content from the response
             content = response.content[0].text
-            
+            print("content from anthropic:", content)
             # Parse the JSON content
             movies = json.loads(content)
             

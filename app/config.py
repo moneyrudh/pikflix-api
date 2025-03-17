@@ -7,6 +7,7 @@ load_dotenv()
 # API Keys and configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TMDB_API_KEY = os.getenv("TMDB_API_KEY")
+TMDB_READ_ACCESS_TOKEN = os.getenv("TMDB_READ_ACCESS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
