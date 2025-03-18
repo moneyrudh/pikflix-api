@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import movies
+from app.api.endpoints import movies, providers
 
 app = FastAPI(
     title="PikFlix API",
@@ -19,7 +19,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(movies.router, prefix="/api/movies", tags=["movies"])
-
+app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 
 @app.get("/health")
 async def health_check():

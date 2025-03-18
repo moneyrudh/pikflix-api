@@ -136,3 +136,90 @@ class SupabaseService:
         #             print(f"{field} is already a string")
 
         return movie_copy
+
+    async def get_movie_providers(self, movie_id: int, region: str = None) -> Dict[str, Any]:
+        """
+        Get movie providers from Supabase
+        
+        Args:
+            movie_id: The movie ID to get providers for
+            region: Optional region code to filter results
+            
+        Returns:
+            Dictionary with provider data or None if not found
+        """
+        query = self.client.table("providers").select("*").eq("movie_id", movie_id)
+        result = query.execute()
+        
+        if not result.data or len(result.data) == 0:
+            return None
+        
+        provider_data = result.data[0]
+        
+        # Return data for specific region if requested
+        if region:
+            column_name = f"country_{region}"
+            if column_name in provider_data and provider_data[column_name]:
+                return {
+                    "id": movie_id,
+                    "results": {
+                        region: provider_data[column_name]
+                    }
+                }
+            # Region not found in database
+            return {
+                "id": movie_id,
+                "results": {
+                    region: {}
+                }
+            }
+        
+        # Process all country fields and map them from "country_XX" to "XX" format
+        countries_data = {}
+        for k, v in provider_data.items():
+            if k.startswith("country_") and v is not None:
+                country_code = k[8:]  # Extract country code by removing "country_" prefix
+                countries_data[country_code] = v
+        
+        return {
+            "id": movie_id,
+            "results": countries_data
+        }
+
+    async def save_movie_providers(self, movie_id: int, provider_data: Dict[str, Any]) -> None:
+        """
+        Save or update movie providers in the database
+        
+        Args:
+            movie_id: The movie ID
+            provider_data: Provider data from TMDB API
+        """
+        try:
+            # Prepare data for insertion
+            data = {
+                "movie_id": movie_id,
+                "last_updated": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Add country-specific provider data with "country_" prefix
+            if "results" in provider_data:
+                for country_code, country_data in provider_data["results"].items():
+                    if country_data:  # Only add non-empty data
+                        column_name = f"country_{country_code}"
+                        data[column_name] = country_data
+            
+            # Check if record exists
+            query = self.client.table("providers").select("movie_id").eq("movie_id", movie_id)
+            result = query.execute()
+            
+            if result.data and len(result.data) > 0:
+                # Update existing record
+                self.client.table("providers").update(data).eq("movie_id", movie_id).execute()
+            else:
+                # Insert new record
+                self.client.table("providers").insert(data).execute()
+                
+            print(f"Saved providers for movie ID: {movie_id}")
+        except Exception as e:
+            print(f"Error saving providers for movie ID {movie_id}: {str(e)}")
+            print(f"Error details: {e.__class__.__name__}")

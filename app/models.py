@@ -68,6 +68,15 @@ class Movie(BaseModel):
 class UserQuery(BaseModel):
     query: str = Field(..., description="Natural language description of movie requirements")
 
+class ProviderRequest(BaseModel):
+    movie_id: int
+    region: str
+
+
+class ProviderResponse(BaseModel):
+    id: int
+    results: Dict[str, Any]
+    
 
 class MovieRecommendationResponse(BaseModel):
     recommendations: List[Movie]

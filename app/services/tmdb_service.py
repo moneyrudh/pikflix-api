@@ -88,3 +88,22 @@ class TMDBService:
                 results.append(movie_data)
         
         return results
+    
+    async def get_movie_providers(self, movie_id: int) -> Dict[str, Any]:
+        """
+        Get movie watch providers (streaming services) from TMDB API
+        Returns data for all available regions
+        """
+        url = f"{self.base_url}/movie/{movie_id}/watch/providers"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                url, 
+                headers=self.headers
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            
+            # Return empty structure if API call fails
+            return {"id": movie_id, "results": {}}
