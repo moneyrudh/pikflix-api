@@ -15,7 +15,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CACHE_DURATION = 24 * 7  # 1 week default cache
 
 # Anthropic API settings
-ANTHROPIC_MODEL = "claude-3-opus-20240229"
+ANTHROPIC_MODEL = "claude-opus-4-6"
 
 # API Base URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
