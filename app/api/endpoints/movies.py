@@ -61,6 +61,10 @@ async def get_recommendations_stream(
                     movie_data = fetched_movies[0]
                     # Save to database asynchronously (don't wait for it)
                     asyncio.create_task(supabase_service.save_movies([movie_data]))
+                    # Fetch and save providers
+                    provider_data = await tmdb_service.get_movie_providers(movie_data["id"])
+                    if provider_data and "results" in provider_data:
+                        asyncio.create_task(supabase_service.save_movie_providers(movie_data["id"], provider_data))
             
             # If we have movie data, convert to Pydantic model and yield
             if movie_data:
