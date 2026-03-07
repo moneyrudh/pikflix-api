@@ -59,3 +59,5 @@ coverage.xml
 # Supabase local development
 supabase/.branches/
 supabase/.temp/
+
+CLAUDE.md
