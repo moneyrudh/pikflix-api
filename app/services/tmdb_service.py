@@ -1,12 +1,12 @@
 from typing import List, Dict, Any, Optional
 import httpx
-from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
+from app.config import settings
 
 
 class TMDBService:
     def __init__(self):
-        self.access_token = TMDB_READ_ACCESS_TOKEN
-        self.base_url = TMDB_BASE_URL
+        self.access_token = settings.TMDB_READ_ACCESS_TOKEN
+        self.base_url = settings.TMDB_BASE_URL
         self.headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json;charset=utf-8"

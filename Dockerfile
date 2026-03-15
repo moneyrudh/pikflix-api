@@ -1,4 +1,4 @@
-# Use Python 3.9 as the base image
+# Use Python 3.11 as the base image
 FROM python:3.11-slim
 
 # Set working directory
@@ -21,6 +21,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application code
 COPY . .
+
+# Create non-root user for security
+RUN adduser --disabled-password --no-create-home appuser && \
+    chown -R appuser:appuser /app /opt/venv
+USER appuser
 
 # Expose the port the app runs on
 EXPOSE 8000

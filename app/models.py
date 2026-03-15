@@ -66,11 +66,20 @@ class Movie(BaseModel):
 
 
 class UserQuery(BaseModel):
-    query: str = Field(..., description="Natural language description of movie requirements")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Natural language description of movie requirements",
+    )
 
 class ProviderRequest(BaseModel):
     movie_id: int
-    region: str
+    region: str = Field(
+        ...,
+        pattern=r"^[A-Z]{2}$",
+        description="ISO 3166-1 alpha-2 country code (e.g. 'US', 'GB')",
+    )
 
 
 class ProviderResponse(BaseModel):

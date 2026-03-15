@@ -3,15 +3,15 @@ from datetime import datetime, timedelta
 import json
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
-from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION
+from app.config import settings
 from datetime import datetime, timedelta, timezone, date
 
 class SupabaseService:
     def __init__(self):
         self.schema = "pikflix"
         self.client: Client = create_client(
-            SUPABASE_URL, 
-            SUPABASE_KEY, 
+            settings.SUPABASE_URL,
+            settings.SUPABASE_KEY,
             options=ClientOptions().replace(schema=self.schema)
         )
         self.table = "movies"
@@ -30,7 +30,7 @@ class SupabaseService:
         to_fetch = []
         
         # Calculate the cache expiry timestamp
-        cache_expiry = datetime.now(timezone.utc) - timedelta(hours=CACHE_DURATION)
+        cache_expiry = datetime.now(timezone.utc) - timedelta(hours=settings.CACHE_DURATION)
         
         for movie in movie_recommendations:
             # Construct a query that searches for movies with matching title

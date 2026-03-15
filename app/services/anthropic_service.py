@@ -5,7 +5,7 @@ import anthropic
 import httpx
 from pydantic import TypeAdapter
 
-from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from app.config import settings
 from app.schemas import MovieRecommendations
 
 
@@ -13,10 +13,10 @@ class AnthropicService:
     def __init__(self):
         http_client = httpx.Client(http2=True)
         self.client = anthropic.Anthropic(
-            api_key=ANTHROPIC_API_KEY,
+            api_key=settings.ANTHROPIC_API_KEY,
             http_client=http_client
         )
-        self.model = ANTHROPIC_MODEL
+        self.model = settings.ANTHROPIC_MODEL
         self._schema = self._build_schema()
 
     @staticmethod
