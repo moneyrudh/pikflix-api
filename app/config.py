@@ -17,5 +17,11 @@ CACHE_DURATION = 24 * 7  # 1 week default cache
 # Anthropic API settings
 ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
 
+# CORS
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+]
+
 # API Base URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
