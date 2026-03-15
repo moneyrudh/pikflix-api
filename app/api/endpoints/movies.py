@@ -10,6 +10,7 @@ from app.auth import require_api_key
 from app.models import UserQuery, Movie
 from app.rate_limit import limiter
 from app.services.anthropic_service import AnthropicService
+from app.services import movie_cache
 from app.services.supabase_service import SupabaseService
 from app.services.tmdb_service import TMDBService
 
@@ -45,6 +46,18 @@ async def _safe_background(coro, description: str):
         logger.exception("Background task failed: %s", description)
 
 
+async def _prefetch_and_cache_providers(
+    tmdb_service: TMDBService,
+    supabase_service: SupabaseService,
+    movie_id: int,
+):
+    """Prefetch providers from TMDB and save to both Supabase and in-memory cache."""
+    provider_data = await tmdb_service.get_movie_providers(movie_id)
+    if provider_data and "results" in provider_data:
+        movie_cache.put_provider(movie_id, provider_data)
+        await supabase_service.save_movie_providers(movie_id, provider_data)
+
+
 @router.post("/recommendations", dependencies=[Depends(require_api_key)])
 async def get_recommendations_stream(
     query: UserQuery,
@@ -56,33 +69,41 @@ async def get_recommendations_stream(
         yield json.dumps({"type": "init", "query": query.query}) + "\n"
 
         async for movie_rec in anthropic_service.get_movie_recommendations(query.query):
-            db_result = await supabase_service.get_movies_by_titles([movie_rec])
-
-            found_movies = db_result["found_movies"]
-            to_fetch = db_result["to_fetch"]
-
             movie_data = None
 
-            if found_movies:
-                movie_data = found_movies[0]
-            elif to_fetch:
-                fetched_movies = await tmdb_service.fetch_movie_data(to_fetch)
+            # Layer 1: In-memory cache (instant, no network)
+            # Only works when we already know the TMDB ID from a previous lookup.
+            if movie_rec.get("id"):
+                movie_data = movie_cache.get_movie(movie_rec["id"])
+
+            # Layer 2: Supabase (network call, but avoids TMDB)
+            if movie_data is None:
+                db_result = await supabase_service.get_movies_by_titles([movie_rec])
+                if db_result["found_movies"]:
+                    movie_data = db_result["found_movies"][0]
+                    movie_cache.put_movie(movie_data)
+
+            # Layer 3: TMDB (slowest — external API)
+            if movie_data is None:
+                fetched_movies = await tmdb_service.fetch_movie_data([movie_rec])
                 if fetched_movies:
                     movie_data = fetched_movies[0]
+                    movie_cache.put_movie(movie_data)
                     asyncio.create_task(
                         _safe_background(
                             supabase_service.save_movies([movie_data]),
                             f"save movie {movie_data.get('title')}",
                         )
                     )
-                    provider_data = await tmdb_service.get_movie_providers(movie_data["id"])
-                    if provider_data and "results" in provider_data:
-                        asyncio.create_task(
-                            _safe_background(
-                                supabase_service.save_movie_providers(movie_data["id"], provider_data),
-                                f"save providers for movie {movie_data['id']}",
-                            )
+                    # Prefetch providers in background — don't block the stream
+                    asyncio.create_task(
+                        _safe_background(
+                            _prefetch_and_cache_providers(
+                                tmdb_service, supabase_service, movie_data["id"]
+                            ),
+                            f"prefetch providers for movie {movie_data['id']}",
                         )
+                    )
 
             if movie_data:
                 try:

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_api_key
 from app.models import ProviderRequest, ProviderResponse
+from app.services import movie_cache
 from app.services.supabase_service import SupabaseService
 from app.services.tmdb_service import TMDBService
 
@@ -38,20 +39,31 @@ async def get_movie_providers(
     """
     Get streaming providers for a specific movie and region.
 
-    Checks Supabase cache first. If not found, fetches from TMDB API and stores it.
+    Checks in-memory cache, then Supabase, then TMDB.
     Always returns only the specified region's data.
     """
     if not request.region:
         raise HTTPException(status_code=400, detail="Region parameter is required")
 
-    db_providers = await supabase_service.get_movie_providers(request.movie_id, request.region)
+    # Layer 1: In-memory cache (populated by /recommendations prefetch)
+    cached = movie_cache.get_provider(request.movie_id)
+    if cached:
+        results = cached.get("results", {})
+        return {
+            "id": request.movie_id,
+            "results": {request.region: results.get(request.region, {})},
+        }
 
+    # Layer 2: Supabase
+    db_providers = await supabase_service.get_movie_providers(request.movie_id, request.region)
     if db_providers:
         return db_providers
 
+    # Layer 3: TMDB
     tmdb_providers = await tmdb_service.get_movie_providers(request.movie_id)
 
     if tmdb_providers and "results" in tmdb_providers:
+        movie_cache.put_provider(request.movie_id, tmdb_providers)
         asyncio.create_task(
             _safe_background(
                 supabase_service.save_movie_providers(request.movie_id, tmdb_providers),
