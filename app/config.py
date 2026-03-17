@@ -15,7 +15,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CACHE_DURATION = 24 * 7  # 1 week default cache
 
 # Anthropic API settings
-ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 # CORS
 CORS_ORIGINS = [

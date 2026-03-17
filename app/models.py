@@ -65,8 +65,20 @@ class Movie(BaseModel):
         from_attributes = True
 
 
+class RecommendationSummary(BaseModel):
+    title: str
+    year: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class ConversationTurn(BaseModel):
+    query: str
+    recommendations: List[RecommendationSummary] = []
+
+
 class UserQuery(BaseModel):
     query: str = Field(..., description="Natural language description of movie requirements")
+    history: Optional[List[ConversationTurn]] = None
 
 class ProviderRequest(BaseModel):
     movie_id: int

@@ -24,7 +24,24 @@ class AnthropicService:
         adapter = TypeAdapter(MovieRecommendations)
         return anthropic.transform_schema(adapter.json_schema())
 
-    async def get_movie_recommendations(self, query: str) -> AsyncGenerator[dict, None]:
+    @staticmethod
+    def _build_user_message(query: str, history: list | None = None) -> str:
+        if not history:
+            return f"Find me movies that match this description: {query}"
+
+        parts = ["Conversation history:\n"]
+        for i, turn in enumerate(history, 1):
+            parts.append(f"[Query {i}]: \"{turn.query}\"")
+            recs = ", ".join(
+                f"{r.title} ({r.year})" if r.year else r.title
+                for r in turn.recommendations
+            )
+            parts.append(f"[Recommended]: {recs}\n")
+
+        parts.append(f"[Current request]: \"{query}\"")
+        return "\n".join(parts)
+
+    async def get_movie_recommendations(self, query: str, history: list | None = None) -> AsyncGenerator[dict, None]:
         """
         Stream movie recommendations using structured output.
         Yields individual movie dicts as they complete in the stream.
@@ -36,10 +53,12 @@ class AnthropicService:
             "If the user searched for a specific movie or a prompt that warrants less than 9 movie responses, "
             "smartly recommend the remaining movies that are the closest match with the movie the user asked for.\n"
             "You MUST give exactly 9 movies. No more. No less.\n"
-            "The user may only require one movie, but you can recommend similar movies based on title, director, genre, etc."
+            "The user may only require one movie, but you can recommend similar movies based on title, director, genre, etc.\n"
+            "When the user provides follow-up requests, use the conversation history to understand context "
+            "and avoid recommending movies that were already suggested."
         )
 
-        user_message = f"Find me movies that match this description: {query}"
+        user_message = self._build_user_message(query, history)
 
         try:
             with self.client.messages.stream(

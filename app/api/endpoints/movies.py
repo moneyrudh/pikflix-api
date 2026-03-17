@@ -42,7 +42,7 @@ async def get_recommendations_stream(
         # Stream header to establish the format
         yield json.dumps({"type": "init", "query": query.query}) + "\n"
         
-        async for movie_rec in anthropic_service.get_movie_recommendations(query.query):
+        async for movie_rec in anthropic_service.get_movie_recommendations(query.query, query.history):
             # Check if movie exists in Supabase
             db_result = await supabase_service.get_movies_by_titles([movie_rec])
             
