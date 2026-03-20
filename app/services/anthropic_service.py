@@ -1,5 +1,8 @@
 import json
+import logging
 from typing import AsyncGenerator
+
+logger = logging.getLogger(__name__)
 
 import anthropic
 import httpx
@@ -101,7 +104,7 @@ class AnthropicService:
                             try:
                                 yield json.loads(buffer)
                             except json.JSONDecodeError:
-                                print(f"Failed to parse: {buffer}")
+                                logger.warning("Failed to parse: %s", buffer)
                             buffer = ""
                             depth -= 1
                             continue
@@ -113,5 +116,5 @@ class AnthropicService:
                             buffer += ch
 
         except Exception as e:
-            print(f"Error streaming from Anthropic API: {str(e)}")
+            logger.error("Error streaming from Anthropic API: %s", e)
             return

@@ -1,5 +1,8 @@
+import logging
 from typing import List, Dict, Any
 from datetime import datetime, timedelta, timezone, date
+
+logger = logging.getLogger(__name__)
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION
@@ -87,15 +90,12 @@ class SupabaseService:
                 # Convert any nested objects to JSON strings
                 prepared_movie = self._prepare_for_db(movie)
                 
-                print(f"Saving movie: {prepared_movie.get('title')}")
+                logger.info("Saving movie: %s", prepared_movie.get('title'))
                 
                 # Upsert the movie (insert if not exists, update if exists)
                 self.client.table(self.table).upsert(prepared_movie).execute()
             except Exception as e:
-                print(f"Error saving movie {movie.get('title', 'unknown')}: {str(e)}")
-                print(f"Error details: {e.__class__.__name__}")
-                # Just in case there's some field causing issues, let's log the keys
-                print(f"Movie fields: {list(movie.keys())}")  
+                logger.error("Error saving movie %s: %s (%s)", movie.get('title', 'unknown'), e, e.__class__.__name__)  
     
     def _prepare_for_db(self, movie: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -170,7 +170,6 @@ class SupabaseService:
             else:
                 self.client.table("providers").insert(data).execute()
                 
-            print(f"Saved providers for movie ID: {movie_id}")
+            logger.info("Saved providers for movie ID: %s", movie_id)
         except Exception as e:
-            print(f"Error saving providers for movie ID {movie_id}: {str(e)}")
-            print(f"Error details: {e.__class__.__name__}")
+            logger.error("Error saving providers for movie ID %s: %s (%s)", movie_id, e, e.__class__.__name__)

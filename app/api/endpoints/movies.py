@@ -1,6 +1,9 @@
+import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-import json
+
+logger = logging.getLogger(__name__)
 from app.models import UserQuery, MovieRecommendationResponse, Movie
 from app.services.anthropic_service import AnthropicService
 from app.services.supabase_service import SupabaseService
@@ -81,7 +84,7 @@ async def get_recommendations_stream(
                         "data": movie.model_dump()
                     }, default=json_serial) + "\n"
                 except Exception as e:
-                    print(f"Error processing movie: {str(e)}")
+                    logger.error("Error processing movie: %s", e)
     
     return StreamingResponse(
         generate(),

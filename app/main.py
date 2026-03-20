@@ -1,7 +1,10 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import movies, providers
 from app.config import CORS_ORIGINS
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 app = FastAPI(
     title="PikFlix API",

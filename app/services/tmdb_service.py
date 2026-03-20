@@ -1,5 +1,8 @@
+import logging
 from typing import List, Dict, Any, Optional
 import httpx
+
+logger = logging.getLogger(__name__)
 from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
 
 
@@ -61,7 +64,7 @@ class TMDBService:
         results = []
         
         for movie in movie_list:
-            print("fetching movie in tmdb with title", movie['title'])
+            logger.info("Fetching movie from TMDB: %s", movie['title'])
             movie_data = None
             reason = movie.get('reason', '')
             
