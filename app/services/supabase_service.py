@@ -15,7 +15,6 @@ class SupabaseService:
             options=ClientOptions().replace(schema=self.schema)
         )
         self.table = "movies"
-        self.full_table = f"{self.schema}.{self.table}"
     
     async def get_movies_by_titles(self, movie_recommendations: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
