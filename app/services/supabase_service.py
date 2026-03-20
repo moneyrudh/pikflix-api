@@ -125,7 +125,7 @@ class SupabaseService:
         Returns:
             Dictionary with provider data or None if not found
         """
-        query = self.client.table("providers").select("*").eq("movie_id", movie_id)
+        query = self.client.table("providers").select("*").eq("content_id", movie_id).eq("content_type", "movie")
         result = query.execute()
 
         if not result.data or len(result.data) == 0:
@@ -157,16 +157,17 @@ class SupabaseService:
         """
         try:
             data = {
-                "movie_id": movie_id,
+                "content_id": movie_id,
+                "content_type": "movie",
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "results": provider_data.get("results", {})
             }
 
-            query = self.client.table("providers").select("movie_id").eq("movie_id", movie_id)
+            query = self.client.table("providers").select("content_id").eq("content_id", movie_id).eq("content_type", "movie")
             result = query.execute()
 
             if result.data and len(result.data) > 0:
-                self.client.table("providers").update(data).eq("movie_id", movie_id).execute()
+                self.client.table("providers").update(data).eq("content_id", movie_id).eq("content_type", "movie").execute()
             else:
                 self.client.table("providers").insert(data).execute()
                 
