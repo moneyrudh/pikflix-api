@@ -1,10 +1,8 @@
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-import json
+from typing import List, Dict, Any
+from datetime import datetime, timedelta, timezone, date
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION
-from datetime import datetime, timedelta, timezone, date
 
 class SupabaseService:
     def __init__(self):
@@ -89,14 +87,6 @@ class SupabaseService:
                 # Convert any nested objects to JSON strings
                 prepared_movie = self._prepare_for_db(movie)
                 
-                # Verify all complex objects are strings before sending to Supabase
-                # for field in ['genres', 'production_companies', 'production_countries', 
-                #             'spoken_languages', 'belongs_to_collection']:
-                #     if field in prepared_movie and prepared_movie[field] is not None:
-                #         if not isinstance(prepared_movie[field], str):
-                #             print(f"WARNING: {field} is still not a string after preparation!")
-                #             prepared_movie[field] = json.dumps(prepared_movie[field])
-                
                 print(f"Saving movie: {prepared_movie.get('title')}")
                 
                 # Upsert the movie (insert if not exists, update if exists)
@@ -121,18 +111,6 @@ class SupabaseService:
         
         if 'release_date' in movie_copy and isinstance(movie_copy['release_date'], date):
             movie_copy['release_date'] = movie_copy['release_date'].isoformat()
-        # # Convert complex nested objects to JSON strings
-        # json_fields = ['genres', 'production_companies', 'production_countries', 
-        #                'spoken_languages', 'belongs_to_collection']
-        
-        # for field in json_fields:
-        #     if field in movie_copy and movie_copy[field] is not None:
-        #         # Skip if it's already a string (this can happen when retrieving from DB)
-        #         if not isinstance(movie_copy[field], str):
-        #             print(f"Converting {field} to JSON string")
-        #             movie_copy[field] = json.dumps(movie_copy[field])
-        #         else:
-        #             print(f"{field} is already a string")
 
         return movie_copy
 
@@ -189,7 +167,6 @@ class SupabaseService:
 
             if result.data and len(result.data) > 0:
                 self.client.table("providers").update(data).eq("movie_id", movie_id).execute()
-                # print(f"but WHAT IS result.data?\n{result}")
             else:
                 self.client.table("providers").insert(data).execute()
                 
