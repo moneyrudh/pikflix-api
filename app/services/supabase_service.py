@@ -1,10 +1,11 @@
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-import json
+import logging
+from typing import List, Dict, Any
+from datetime import datetime, timedelta, timezone, date
+
+logger = logging.getLogger(__name__)
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION
-from datetime import datetime, timedelta, timezone, date
 
 class SupabaseService:
     def __init__(self):
@@ -15,7 +16,6 @@ class SupabaseService:
             options=ClientOptions().replace(schema=self.schema)
         )
         self.table = "movies"
-        self.full_table = f"{self.schema}.{self.table}"
     
     async def get_movies_by_titles(self, movie_recommendations: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -90,23 +90,12 @@ class SupabaseService:
                 # Convert any nested objects to JSON strings
                 prepared_movie = self._prepare_for_db(movie)
                 
-                # Verify all complex objects are strings before sending to Supabase
-                # for field in ['genres', 'production_companies', 'production_countries', 
-                #             'spoken_languages', 'belongs_to_collection']:
-                #     if field in prepared_movie and prepared_movie[field] is not None:
-                #         if not isinstance(prepared_movie[field], str):
-                #             print(f"WARNING: {field} is still not a string after preparation!")
-                #             prepared_movie[field] = json.dumps(prepared_movie[field])
-                
-                print(f"Saving movie: {prepared_movie.get('title')}")
+                logger.info("Saving movie: %s", prepared_movie.get('title'))
                 
                 # Upsert the movie (insert if not exists, update if exists)
                 self.client.table(self.table).upsert(prepared_movie).execute()
             except Exception as e:
-                print(f"Error saving movie {movie.get('title', 'unknown')}: {str(e)}")
-                print(f"Error details: {e.__class__.__name__}")
-                # Just in case there's some field causing issues, let's log the keys
-                print(f"Movie fields: {list(movie.keys())}")  
+                logger.error("Error saving movie %s: %s (%s)", movie.get('title', 'unknown'), e, e.__class__.__name__)  
     
     def _prepare_for_db(self, movie: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -122,18 +111,6 @@ class SupabaseService:
         
         if 'release_date' in movie_copy and isinstance(movie_copy['release_date'], date):
             movie_copy['release_date'] = movie_copy['release_date'].isoformat()
-        # # Convert complex nested objects to JSON strings
-        # json_fields = ['genres', 'production_companies', 'production_countries', 
-        #                'spoken_languages', 'belongs_to_collection']
-        
-        # for field in json_fields:
-        #     if field in movie_copy and movie_copy[field] is not None:
-        #         # Skip if it's already a string (this can happen when retrieving from DB)
-        #         if not isinstance(movie_copy[field], str):
-        #             print(f"Converting {field} to JSON string")
-        #             movie_copy[field] = json.dumps(movie_copy[field])
-        #         else:
-        #             print(f"{field} is already a string")
 
         return movie_copy
 
@@ -148,7 +125,7 @@ class SupabaseService:
         Returns:
             Dictionary with provider data or None if not found
         """
-        query = self.client.table("providers").select("*").eq("movie_id", movie_id)
+        query = self.client.table("providers").select("*").eq("content_id", movie_id).eq("content_type", "movie")
         result = query.execute()
 
         if not result.data or len(result.data) == 0:
@@ -180,21 +157,20 @@ class SupabaseService:
         """
         try:
             data = {
-                "movie_id": movie_id,
+                "content_id": movie_id,
+                "content_type": "movie",
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "results": provider_data.get("results", {})
             }
 
-            query = self.client.table("providers").select("movie_id").eq("movie_id", movie_id)
+            query = self.client.table("providers").select("content_id").eq("content_id", movie_id).eq("content_type", "movie")
             result = query.execute()
 
             if result.data and len(result.data) > 0:
-                self.client.table("providers").update(data).eq("movie_id", movie_id).execute()
-                # print(f"but WHAT IS result.data?\n{result}")
+                self.client.table("providers").update(data).eq("content_id", movie_id).eq("content_type", "movie").execute()
             else:
                 self.client.table("providers").insert(data).execute()
                 
-            print(f"Saved providers for movie ID: {movie_id}")
+            logger.info("Saved providers for movie ID: %s", movie_id)
         except Exception as e:
-            print(f"Error saving providers for movie ID {movie_id}: {str(e)}")
-            print(f"Error details: {e.__class__.__name__}")
+            logger.error("Error saving providers for movie ID %s: %s (%s)", movie_id, e, e.__class__.__name__)

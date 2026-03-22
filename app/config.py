@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -10,6 +11,18 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 TMDB_READ_ACCESS_TOKEN = os.getenv("TMDB_READ_ACCESS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+# Validate required env vars
+_required = {
+    "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+    "TMDB_READ_ACCESS_TOKEN": TMDB_READ_ACCESS_TOKEN,
+    "SUPABASE_URL": SUPABASE_URL,
+    "SUPABASE_KEY": SUPABASE_KEY,
+}
+_missing = [name for name, val in _required.items() if not val]
+if _missing:
+    print(f"Missing required environment variables: {', '.join(_missing)}", file=sys.stderr)
+    sys.exit(1)
 
 # Cache settings (in hours)
 CACHE_DURATION = 24 * 7  # 1 week default cache

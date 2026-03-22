@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: mypy-type-validation
+        name: type validation (changed lines)
+        entry: python3
+        language: system
+        types: [python]
+        args: [app/type_validation/main.py]
