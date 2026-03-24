@@ -35,7 +35,7 @@ class SupabaseService:
         cache_expiry = datetime.now(timezone.utc) - timedelta(hours=CACHE_DURATION)
 
         for rec in recommendations:
-            query = self.client.table(table).select("*").ilike(title_col, f"%{rec['title']}%")
+            query = self.client.table(table).select("*").eq(title_col, rec['title'])
 
             if 'year' in rec and rec['year']:
                 query = query.filter(date_col, "gte", f"{rec['year']}-01-01")
