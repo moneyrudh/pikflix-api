@@ -6,7 +6,8 @@ logger = logging.getLogger(__name__)
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION
-from app.models import ContentType
+from app.models import ContentType, FetchRequest, CacheResult
+from app.schemas import ContentRecommendation
 
 class SupabaseService:
     def __init__(self):
@@ -21,7 +22,7 @@ class SupabaseService:
     def _table_for(content_type: ContentType) -> str:
         return "shows" if content_type == ContentType.SHOW else "movies"
 
-    async def get_content_by_titles(self, recommendations: List[Dict[str, Any]], content_type: ContentType) -> Dict[str, Any]:
+    async def get_content_by_titles(self, recommendations: List[ContentRecommendation], content_type: ContentType) -> CacheResult:
         """
         Check if content exists in the database and determine which need to be fetched/refreshed.
         Branches column names based on content_type (title/release_date vs name/first_air_date).
@@ -35,11 +36,11 @@ class SupabaseService:
         cache_expiry = datetime.now(timezone.utc) - timedelta(hours=CACHE_DURATION)
 
         for rec in recommendations:
-            query = self.client.table(table).select("*").eq(title_col, rec['title'])
+            query = self.client.table(table).select("*").eq(title_col, rec.title)
 
-            if 'year' in rec and rec['year']:
-                query = query.filter(date_col, "gte", f"{rec['year']}-01-01")
-                query = query.filter(date_col, "lte", f"{rec['year']}-12-31")
+            if rec.year:
+                query = query.filter(date_col, "gte", f"{rec.year}-01-01")
+                query = query.filter(date_col, "lte", f"{rec.year}-12-31")
 
             result = query.execute()
 
@@ -48,23 +49,23 @@ class SupabaseService:
                 last_updated = datetime.fromisoformat(item['last_updated'])
 
                 if last_updated < cache_expiry:
-                    to_fetch.append({
-                        "title": rec['title'],
-                        "year": rec.get('year'),
-                        "reason": rec.get('reason'),
-                        "id": item['id']
-                    })
+                    to_fetch.append(FetchRequest(
+                        title=rec.title,
+                        year=rec.year,
+                        reason=rec.reason,
+                        id=item['id']
+                    ))
                 else:
-                    item['reason'] = rec.get('reason', '')
+                    item['reason'] = rec.reason or ''
                     found.append(item)
             else:
-                to_fetch.append({
-                    "title": rec['title'],
-                    "year": rec.get('year'),
-                    "reason": rec.get('reason')
-                })
+                to_fetch.append(FetchRequest(
+                    title=rec.title,
+                    year=rec.year,
+                    reason=rec.reason
+                ))
 
-        return {"found": found, "to_fetch": to_fetch}
+        return CacheResult(found=found, to_fetch=to_fetch)
 
     async def save_content(self, items: List[Dict[str, Any]], content_type: ContentType) -> None:
         table = self._table_for(content_type)

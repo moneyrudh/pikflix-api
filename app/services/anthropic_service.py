@@ -10,7 +10,7 @@ from pydantic import TypeAdapter
 
 from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from app.models import ContentTypeMode
-from app.schemas import ContentRecommendations
+from app.schemas import ContentRecommendation, ContentRecommendations
 from app.prompts import get_recommendation_system_prompt, get_recommendation_user_message
 
 
@@ -29,7 +29,7 @@ class AnthropicService:
         adapter = TypeAdapter(ContentRecommendations)
         return anthropic.transform_schema(adapter.json_schema())
 
-    async def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE) -> AsyncGenerator[dict, None]:
+    async def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE) -> AsyncGenerator[ContentRecommendation, None]:
         """
         Stream content recommendations using structured output.
         Yields individual recommendation dicts as they complete in the stream.
@@ -77,7 +77,7 @@ class AnthropicService:
                         if ch == '}' and depth == 2:
                             buffer += '}'
                             try:
-                                yield json.loads(buffer)
+                                yield ContentRecommendation.model_validate(json.loads(buffer))
                             except json.JSONDecodeError:
                                 logger.warning("Failed to parse: %s", buffer)
                             buffer = ""

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode
+from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode, FetchRequest
 from app.services.anthropic_service import AnthropicService
 from app.services.supabase_service import SupabaseService
 from app.services.tmdb_service import TMDBService
@@ -50,7 +50,7 @@ async def get_recommendations_stream(
             # Determine content_type for this specific recommendation
             if is_both:
                 # Use Claude's per-item classification
-                rec_type = ContentType(rec.get("content_type", ContentType.MOVIE.value))
+                rec_type = ContentType(rec.content_type)
             else:
                 # Explicit mode — ignore Claude's classification, use request type
                 rec_type = ContentType(request_mode.value)
@@ -58,19 +58,17 @@ async def get_recommendations_stream(
             model_class = Show if rec_type == ContentType.SHOW else Movie
 
             # Check Supabase cache first
-            db_result = await supabase_service.get_content_by_titles([rec], rec_type)
-            found = db_result["found"]
-            to_fetch = db_result["to_fetch"]
+            cache_result = await supabase_service.get_content_by_titles([rec], rec_type)
 
             item_data = None
             resolved_type = rec_type
 
-            if found:
-                item_data = found[0]
-            elif to_fetch:
-                fetch_item = to_fetch[0]
+            if cache_result.found:
+                item_data = cache_result.found[0]
+            elif cache_result.to_fetch:
+                fetch_item = cache_result.to_fetch[0]
 
-                if 'id' in fetch_item and fetch_item['id']:
+                if fetch_item.id:
                     # Direct fetch by cached ID
                     fetched = await tmdb_service.fetch_content_data([fetch_item], rec_type)
                     if fetched:
@@ -78,11 +76,11 @@ async def get_recommendations_stream(
                 else:
                     # Search TMDB with fallback to other type
                     data, resolved_type = await tmdb_service.search_content(
-                        fetch_item['title'], fetch_item.get('year'), rec_type
+                        fetch_item.title, fetch_item.year, rec_type
                     )
                     if data:
                         item_data = data
-                        item_data['reason'] = fetch_item.get('reason', '')
+                        item_data['reason'] = fetch_item.reason or ''
                         model_class = Show if resolved_type == ContentType.SHOW else Movie
 
                 if item_data:
@@ -93,7 +91,7 @@ async def get_recommendations_stream(
 
             if item_data:
                 try:
-                    item_data["reason"] = rec.get("reason", "")
+                    item_data["reason"] = rec.reason or ""
                     validated = model_class.model_validate(item_data)
                     yield json.dumps({
                         "type": "content",
@@ -101,7 +99,7 @@ async def get_recommendations_stream(
                         "data": validated.model_dump()
                     }, default=json_serial) + "\n"
                 except Exception as e:
-                    logger.error("Error processing %s '%s': %s", resolved_type.value, rec.get('title', '?'), e)
+                    logger.error("Error processing %s '%s': %s", resolved_type.value, rec.title, e)
 
     return StreamingResponse(
         generate(),

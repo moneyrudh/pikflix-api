@@ -4,7 +4,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
-from app.models import ContentType
+from app.models import ContentType, FetchRequest
 
 
 class TMDBService:
@@ -56,36 +56,33 @@ class TMDBService:
             
             return {}
     
-    async def fetch_movie_data(self, movie_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def fetch_movie_data(self, movie_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         """
         Fetch detailed movie data for each movie in the list
-        
+
         If a movie has an ID, fetch directly. Otherwise, search by title/year.
         """
         results = []
-        
+
         for movie in movie_list:
-            logger.info("Fetching movie from TMDB: %s", movie['title'])
+            logger.info("Fetching movie from TMDB: %s", movie.title)
             movie_data = None
-            reason = movie.get('reason', '')
-            
-            if 'id' in movie and movie['id']:
+            reason = movie.reason or ''
+
+            if movie.id:
                 # Direct fetch by ID
-                movie_data = await self.get_movie_details(movie['id'])
+                movie_data = await self.get_movie_details(movie.id)
             else:
                 # Search by title and year
-                title = movie['title']
-                year = movie.get('year')
-                
-                search_results = await self.search_movies(title, year)
+                search_results = await self.search_movies(movie.title, movie.year)
                 if search_results:
                     movie_id = search_results[0]['id']
                     movie_data = await self.get_movie_details(movie_id)
-            
+
             if movie_data:
                 movie_data['reason'] = reason
                 results.append(movie_data)
-        
+
         return results
     
     async def get_movie_providers(self, movie_id: int) -> Dict[str, Any]:
@@ -128,19 +125,17 @@ class TMDBService:
                 return response.json()
             return {}
 
-    async def fetch_show_data(self, show_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def fetch_show_data(self, show_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         results = []
         for show in show_list:
-            logger.info("Fetching show from TMDB: %s", show['title'])
+            logger.info("Fetching show from TMDB: %s", show.title)
             show_data = None
-            reason = show.get('reason', '')
+            reason = show.reason or ''
 
-            if 'id' in show and show['id']:
-                show_data = await self.get_show_details(show['id'])
+            if show.id:
+                show_data = await self.get_show_details(show.id)
             else:
-                title = show['title']
-                year = show.get('year')
-                search_results = await self.search_shows(title, year)
+                search_results = await self.search_shows(show.title, show.year)
                 if search_results:
                     show_id = search_results[0]['id']
                     show_data = await self.get_show_details(show_id)
@@ -158,7 +153,7 @@ class TMDBService:
                 return response.json()
             return {"id": show_id, "results": {}}
 
-    async def fetch_content_data(self, content_list: List[Dict[str, Any]], content_type: ContentType) -> List[Dict[str, Any]]:
+    async def fetch_content_data(self, content_list: List[FetchRequest], content_type: ContentType) -> List[Dict[str, Any]]:
         if content_type == ContentType.SHOW:
             return await self.fetch_show_data(content_list)
         return await self.fetch_movie_data(content_list)
