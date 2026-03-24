@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode, FetchRequest
+from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode
 from app.services.anthropic_service import AnthropicService
 from app.services.supabase_service import SupabaseService
 from app.services.tmdb_service import TMDBService
@@ -31,6 +31,16 @@ def json_serial(obj):
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
+
+
+async def _cache_providers(tmdb_service: TMDBService, supabase_service: SupabaseService, content_id: int, content_type: ContentType):
+    """Fetch and cache providers in the background."""
+    try:
+        provider_data = await tmdb_service.get_content_providers(content_id, content_type)
+        if provider_data and "results" in provider_data:
+            await supabase_service.save_providers(content_id, content_type, provider_data)
+    except Exception as e:
+        logger.error("Error caching providers for %s ID %s: %s", content_type.value, content_id, e)
 
 
 @router.post("/recommendations")
@@ -83,12 +93,6 @@ async def get_recommendations_stream(
                         item_data['reason'] = fetch_item.reason or ''
                         model_class = Show if resolved_type == ContentType.SHOW else Movie
 
-                if item_data:
-                    asyncio.create_task(supabase_service.save_content([item_data], resolved_type))
-                    provider_data = await tmdb_service.get_content_providers(item_data["id"], resolved_type)
-                    if provider_data and "results" in provider_data:
-                        asyncio.create_task(supabase_service.save_providers(item_data["id"], resolved_type, provider_data))
-
             if item_data:
                 try:
                     item_data["reason"] = rec.reason or ""
@@ -100,6 +104,11 @@ async def get_recommendations_stream(
                     }, default=json_serial) + "\n"
                 except Exception as e:
                     logger.error("Error processing %s '%s': %s", resolved_type.value, rec.title, e)
+
+                # Background: cache content and providers (only if freshly fetched)
+                if cache_result.to_fetch:
+                    asyncio.create_task(supabase_service.save_content([item_data], resolved_type))
+                    asyncio.create_task(_cache_providers(tmdb_service, supabase_service, item_data["id"], resolved_type))
 
     return StreamingResponse(
         generate(),
