@@ -1,14 +1,13 @@
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.models import UserQuery, MovieRecommendationResponse, Movie
+from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode
 from app.services.anthropic_service import AnthropicService
 from app.services.supabase_service import SupabaseService
 from app.services.tmdb_service import TMDBService
-from typing import List
 import asyncio
 from datetime import date, datetime
 
@@ -27,12 +26,22 @@ def get_tmdb_service():
     return TMDBService()
 
 
-# Add this function to serialize dates for JSON
 def json_serial(obj):
     """JSON serializer for objects not serializable by default json code"""
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
+
+
+async def _cache_providers(tmdb_service: TMDBService, supabase_service: SupabaseService, content_id: int, content_type: ContentType):
+    """Fetch and cache providers in the background."""
+    try:
+        provider_data = await tmdb_service.get_content_providers(content_id, content_type)
+        if provider_data and "results" in provider_data:
+            await supabase_service.save_providers(content_id, content_type, provider_data)
+    except Exception as e:
+        logger.error("Error caching providers for %s ID %s: %s", content_type.value, content_id, e)
+
 
 @router.post("/recommendations")
 async def get_recommendations_stream(
@@ -41,51 +50,66 @@ async def get_recommendations_stream(
     supabase_service: SupabaseService = Depends(get_supabase_service),
     tmdb_service: TMDBService = Depends(get_tmdb_service)
 ):
+    request_mode = query.content_type
+    is_both = request_mode == ContentTypeMode.BOTH
+
     async def generate():
-        # Stream header to establish the format
-        yield json.dumps({"type": "init", "query": query.query}) + "\n"
-        
-        async for movie_rec in anthropic_service.get_movie_recommendations(query.query, query.history):
-            # Check if movie exists in Supabase
-            db_result = await supabase_service.get_movies_by_titles([movie_rec])
-            
-            found_movies = db_result["found_movies"]
-            to_fetch = db_result["to_fetch"]
-            
-            movie_data = None
-            
-            # If movie is in database and fresh
-            if found_movies:
-                movie_data = found_movies[0]
-            # If movie needs to be fetched
-            elif to_fetch:
-                fetched_movies = await tmdb_service.fetch_movie_data(to_fetch)
-                if fetched_movies:
-                    movie_data = fetched_movies[0]
-                    # Save to database asynchronously (don't wait for it)
-                    asyncio.create_task(supabase_service.save_movies([movie_data]))
-                    # Fetch and save providers
-                    provider_data = await tmdb_service.get_movie_providers(movie_data["id"])
-                    if provider_data and "results" in provider_data:
-                        asyncio.create_task(supabase_service.save_movie_providers(movie_data["id"], provider_data))
-            
-            # If we have movie data, convert to Pydantic model and yield
-            if movie_data:
+        yield json.dumps({"type": "init", "query": query.query, "content_type": request_mode.value}) + "\n"
+
+        async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode):
+            # Determine content_type for this specific recommendation
+            if is_both:
+                # Use Claude's per-item classification
+                rec_type = ContentType(rec.content_type)
+            else:
+                # Explicit mode — ignore Claude's classification, use request type
+                rec_type = ContentType(request_mode.value)
+
+            model_class = Show if rec_type == ContentType.SHOW else Movie
+
+            # Check Supabase cache first
+            cache_result = await supabase_service.get_content_by_titles([rec], rec_type)
+
+            item_data = None
+            resolved_type = rec_type
+
+            if cache_result.found:
+                item_data = cache_result.found[0]
+            elif cache_result.to_fetch:
+                fetch_item = cache_result.to_fetch[0]
+
+                if fetch_item.id:
+                    # Direct fetch by cached ID
+                    fetched = await tmdb_service.fetch_content_data([fetch_item], rec_type)
+                    if fetched:
+                        item_data = fetched[0]
+                else:
+                    # Search TMDB with fallback to other type
+                    data, resolved_type = await tmdb_service.search_content(
+                        fetch_item.title, fetch_item.year, rec_type
+                    )
+                    if data:
+                        item_data = data
+                        item_data['reason'] = fetch_item.reason or ''
+                        model_class = Show if resolved_type == ContentType.SHOW else Movie
+
+            if item_data:
                 try:
-                    # Add the "reason" from the recommendation
-                    movie_data["reason"] = movie_rec.get("reason", "")
-                    
-                    # Convert to Pydantic model
-                    movie = Movie.model_validate(movie_data)
-                    
-                    # Use custom serializer for the date objects
+                    item_data["reason"] = rec.reason or ""
+                    validated = model_class.model_validate(item_data)
                     yield json.dumps({
-                        "type": "movie", 
-                        "data": movie.model_dump()
+                        "type": "content",
+                        "content_type": resolved_type.value,
+                        "data": validated.model_dump()
                     }, default=json_serial) + "\n"
                 except Exception as e:
-                    logger.error("Error processing movie: %s", e)
-    
+                    logger.error("Error processing %s '%s': %s", resolved_type.value, rec.title, e)
+
+                # Background: cache content and providers (only if freshly fetched)
+                if cache_result.to_fetch:
+                    asyncio.create_task(supabase_service.save_content([item_data], resolved_type))
+                    asyncio.create_task(_cache_providers(tmdb_service, supabase_service, item_data["id"], resolved_type))
+
     return StreamingResponse(
         generate(),
         media_type="application/x-ndjson"
