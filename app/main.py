@@ -1,7 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import movies, providers
+from app.api.endpoints import recommendations, providers
 from app.config import CORS_ORIGINS
 
 RESET = "\033[0m"
@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 app = FastAPI(
     title="PikFlix API",
-    description="A FastAPI server for handling movie recommendations",
+    description="A FastAPI server for handling content recommendations",
     version="1.0.0"
 )
 
@@ -40,7 +40,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(movies.router, prefix="/api/movies", tags=["movies"])
+app.include_router(recommendations.router, prefix="/api/recommendations", tags=["recommendations"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 
 @app.get("/health")
