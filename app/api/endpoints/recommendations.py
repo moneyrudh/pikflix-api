@@ -43,7 +43,7 @@ async def _cache_providers(tmdb_service: TMDBService, supabase_service: Supabase
         logger.error("Error caching providers for %s ID %s: %s", content_type.value, content_id, e)
 
 
-@router.post("/recommendations")
+@router.post("/")
 async def get_recommendations_stream(
     query: UserQuery,
     anthropic_service: AnthropicService = Depends(get_anthropic_service),
