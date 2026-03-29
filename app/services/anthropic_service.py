@@ -29,7 +29,7 @@ class AnthropicService:
         adapter = TypeAdapter(ContentRecommendations)
         return anthropic.transform_schema(adapter.json_schema())
 
-    async def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE) -> AsyncGenerator[ContentRecommendation, None]:
+    async def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE, web_search: bool = False) -> AsyncGenerator[ContentRecommendation, None]:
         """
         Stream content recommendations using structured output.
         Yields individual recommendation dicts as they complete in the stream.
@@ -38,12 +38,21 @@ class AnthropicService:
         system_prompt = get_recommendation_system_prompt(content_type)
         user_message = get_recommendation_user_message(query, content_type, history)
 
+        tools = []
+        if web_search:
+            tools.append({
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": 2,
+            })
+
         try:
             with self.client.messages.stream(
                 model=self.model,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
                 max_tokens=4096,
+                **({"tools": tools} if tools else {}),
                 output_config={
                     "format": {
                         "type": "json_schema",
@@ -55,8 +64,25 @@ class AnthropicService:
                 depth = 0
                 in_string = False
 
-                for text in stream.text_stream:
-                    for ch in text:
+                for event in stream:
+                    if event.type == "content_block_start":
+                        if event.content_block.type == "server_tool_use":
+                            logger.info("Web search triggered: %s", event.content_block.name)
+                        elif event.content_block.type == "web_search_tool_result":
+                            try:
+                                for result in event.content_block.content:
+                                    if result.type == "web_search_result":
+                                        logger.info("Search result: %s — %s", result.title, result.url)
+                            except (AttributeError, TypeError):
+                                pass
+                        continue
+
+                    if event.type != "content_block_delta":
+                        continue
+                    if event.delta.type != "text_delta":
+                        continue
+
+                    for ch in event.delta.text:
                         if in_string:
                             buffer += ch
                             if ch == '"':

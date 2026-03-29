@@ -174,6 +174,7 @@ class UserQuery(BaseModel):
     query: str = Field(..., description="Natural language description of what to watch")
     content_type: ContentTypeMode = ContentTypeMode.MOVIE
     history: Optional[List[ConversationTurn]] = None
+    web_search: bool = False
 
 class FetchRequest(BaseModel):
     """Item that needs to be fetched from TMDB — either fresh or cache-expired."""

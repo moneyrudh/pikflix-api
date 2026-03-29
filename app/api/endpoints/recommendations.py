@@ -56,7 +56,7 @@ async def get_recommendations_stream(
     async def generate():
         yield json.dumps({"type": "init", "query": query.query, "content_type": request_mode.value}) + "\n"
 
-        async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode):
+        async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode, query.web_search):
             # Determine content_type for this specific recommendation
             if is_both:
                 # Use Claude's per-item classification
