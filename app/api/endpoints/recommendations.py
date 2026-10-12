@@ -5,25 +5,13 @@ from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode
-from app.services.anthropic_service import AnthropicService
-from app.services.supabase_service import SupabaseService
-from app.services.tmdb_service import TMDBService
+from app.services.anthropic_service import AnthropicService, get_anthropic_service
+from app.services.supabase_service import SupabaseService, get_supabase_service
+from app.services.tmdb_service import TMDBService, get_tmdb_service
 import asyncio
 from datetime import date, datetime
 
 router = APIRouter()
-
-
-def get_anthropic_service():
-    return AnthropicService()
-
-
-def get_supabase_service():
-    return SupabaseService()
-
-
-def get_tmdb_service():
-    return TMDBService()
 
 
 def json_serial(obj):

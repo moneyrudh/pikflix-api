@@ -1,8 +1,12 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import recommendations, providers
 from app.config import CORS_ORIGINS
+from app.services.anthropic_service import get_anthropic_service
+from app.services.supabase_service import get_supabase_service
+from app.services.tmdb_service import get_tmdb_service
 
 RESET = "\033[0m"
 LEVEL_COLORS = {
@@ -24,10 +28,19 @@ handler = logging.StreamHandler()
 handler.setFormatter(ColorFormatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    # Services are shared for the app's lifetime; close their connection pools on shutdown.
+    for service in (get_anthropic_service(), get_tmdb_service(), get_supabase_service()):
+        await service.close()
+
+
 app = FastAPI(
     title="PikFlix API",
     description="A FastAPI server for handling content recommendations",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS

@@ -1,4 +1,5 @@
 import logging
+from functools import cache
 from typing import List, Dict, Any, Optional
 import httpx
 
@@ -15,6 +16,11 @@ class TMDBService:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json;charset=utf-8"
         }
+        # One pooled client for every TMDB call, instead of a new connection (and TLS handshake) per request
+        self.client = httpx.AsyncClient(timeout=30.0, headers=self.headers)
+
+    async def close(self) -> None:
+        await self.client.aclose()
     
     async def search_movies(self, query: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
         """
@@ -26,36 +32,27 @@ class TMDBService:
         if year:
             params["year"] = year
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                url, 
-                headers=self.headers, 
-                params=params
-            )
-            
-            if response.status_code == 200:
-                results = response.json().get("results", [])
-                return results[:1] if results else []  # Return only the top match
-            
-            return []
-    
+        response = await self.client.get(url, params=params)
+        
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            return results[:1] if results else []  # Return only the top match
+        
+        return []
+
     async def get_movie_details(self, movie_id: int) -> Dict[str, Any]:
         """
         Get detailed information about a movie by its ID
         """
         url = f"{self.base_url}/movie/{movie_id}"
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                url, 
-                headers=self.headers
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            
-            return {}
-    
+        response = await self.client.get(url)
+        
+        if response.status_code == 200:
+            return response.json()
+        
+        return {}
+
     async def fetch_movie_data(self, movie_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         """
         Fetch detailed movie data for each movie in the list
@@ -92,17 +89,13 @@ class TMDBService:
         """
         url = f"{self.base_url}/movie/{movie_id}/watch/providers"
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                url,
-                headers=self.headers
-            )
+        response = await self.client.get(url)
 
-            if response.status_code == 200:
-                return response.json()
+        if response.status_code == 200:
+            return response.json()
 
-            # Return empty structure if API call fails
-            return {"id": movie_id, "results": {}}
+        # Return empty structure if API call fails
+        return {"id": movie_id, "results": {}}
 
     async def search_shows(self, query: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/search/tv"
@@ -110,20 +103,18 @@ class TMDBService:
         if year:
             params["first_air_date_year"] = year
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=self.headers, params=params)
-            if response.status_code == 200:
-                results = response.json().get("results", [])
-                return results[:1] if results else []
-            return []
+        response = await self.client.get(url, params=params)
+        if response.status_code == 200:
+            results = response.json().get("results", [])
+            return results[:1] if results else []
+        return []
 
     async def get_show_details(self, show_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/tv/{show_id}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=self.headers)
-            if response.status_code == 200:
-                return response.json()
-            return {}
+        response = await self.client.get(url)
+        if response.status_code == 200:
+            return response.json()
+        return {}
 
     async def fetch_show_data(self, show_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         results = []
@@ -147,11 +138,10 @@ class TMDBService:
 
     async def get_show_providers(self, show_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/tv/{show_id}/watch/providers"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=self.headers)
-            if response.status_code == 200:
-                return response.json()
-            return {"id": show_id, "results": {}}
+        response = await self.client.get(url)
+        if response.status_code == 200:
+            return response.json()
+        return {"id": show_id, "results": {}}
 
     async def fetch_content_data(self, content_list: List[FetchRequest], content_type: ContentType) -> List[Dict[str, Any]]:
         if content_type == ContentType.SHOW:
@@ -194,3 +184,8 @@ class TMDBService:
                 return data, fallback_type
 
         return None, content_type
+
+
+@cache
+def get_tmdb_service() -> TMDBService:
+    return TMDBService()

@@ -26,6 +26,7 @@ if _missing:
 
 # Cache settings (in hours)
 CACHE_DURATION = 24 * 7  # 1 week default cache
+PROVIDER_CACHE_DURATION = 24  # streaming availability changes often
 
 # Anthropic API settings
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"

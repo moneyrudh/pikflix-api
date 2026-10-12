@@ -1,5 +1,6 @@
 import json
 import logging
+from functools import cache
 from typing import AsyncGenerator
 
 logger = logging.getLogger(__name__)
@@ -16,10 +17,11 @@ from app.prompts import get_recommendation_system_prompt, get_recommendation_use
 
 class AnthropicService:
     def __init__(self):
-        http_client = httpx.Client(http2=True)
-        self.client = anthropic.Anthropic(
+        # Async client: iterating a sync stream inside an async generator blocks the
+        # event loop, stalling every other request until this one finishes.
+        self.client = anthropic.AsyncAnthropic(
             api_key=ANTHROPIC_API_KEY,
-            http_client=http_client
+            http_client=httpx.AsyncClient(http2=True)
         )
         self.model = ANTHROPIC_MODEL
         self._schema = self._build_schema()
@@ -47,7 +49,7 @@ class AnthropicService:
             })
 
         try:
-            with self.client.messages.stream(
+            async with self.client.messages.stream(
                 model=self.model,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_message}],
@@ -63,8 +65,9 @@ class AnthropicService:
                 buffer = ""
                 depth = 0
                 in_string = False
+                escaped = False  # previous char was a backslash inside a string
 
-                for event in stream:
+                async for event in stream:
                     if event.type == "content_block_start":
                         if event.content_block.type == "server_tool_use":
                             logger.info("Web search triggered: %s", event.content_block.name)
@@ -85,7 +88,11 @@ class AnthropicService:
                     for ch in event.delta.text:
                         if in_string:
                             buffer += ch
-                            if ch == '"':
+                            if escaped:
+                                escaped = False
+                            elif ch == '\\':
+                                escaped = True
+                            elif ch == '"':
                                 in_string = False
                             continue
 
@@ -119,3 +126,12 @@ class AnthropicService:
         except Exception as e:
             logger.error("Error streaming from Anthropic API: %s", e)
             return
+
+    async def close(self) -> None:
+        await self.client.close()
+
+
+@cache
+def get_anthropic_service() -> AnthropicService:
+    """One shared instance, so the HTTP connection pool is reused across requests."""
+    return AnthropicService()

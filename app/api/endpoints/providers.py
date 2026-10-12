@@ -1,18 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.models import ProviderRequest, ProviderResponse
-from app.services.supabase_service import SupabaseService
-from app.services.tmdb_service import TMDBService
+from app.services.supabase_service import SupabaseService, get_supabase_service
+from app.services.tmdb_service import TMDBService, get_tmdb_service
 import asyncio
 
 router = APIRouter()
-
-
-def get_supabase_service():
-    return SupabaseService()
-
-
-def get_tmdb_service():
-    return TMDBService()
 
 
 @router.post("/", response_model=ProviderResponse)
