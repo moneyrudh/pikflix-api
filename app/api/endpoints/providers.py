@@ -20,7 +20,7 @@ async def get_providers(
     db_providers = await supabase_service.get_providers(request.content_id, request.content_type, request.region)
 
     if db_providers:
-        return db_providers
+        return ProviderResponse.model_validate(db_providers)
 
     # Fetch from TMDB
     tmdb_providers = await tmdb_service.get_content_providers(request.content_id, request.content_type)
@@ -31,9 +31,4 @@ async def get_providers(
     results = tmdb_providers.get("results", {}) if tmdb_providers else {}
     region_data = results.get(request.region, {})
 
-    return {
-        "id": request.content_id,
-        "results": {
-            request.region: region_data
-        }
-    }
+    return ProviderResponse(id=request.content_id, results={request.region: region_data})

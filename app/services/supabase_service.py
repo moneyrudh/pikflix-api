@@ -61,7 +61,8 @@ class SupabaseService:
                 item = result.data[0]
                 last_updated = datetime.fromisoformat(item['last_updated'])
 
-                if last_updated < cache_expiry:
+                # Rows cached before trailers existed are refetched once to backfill them
+                if last_updated < cache_expiry or item.get('videos_checked_at') is None:
                     to_fetch.append(FetchRequest(
                         title=rec.title,
                         year=rec.year,

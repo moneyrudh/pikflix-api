@@ -1,11 +1,35 @@
 import logging
+from datetime import datetime, timezone
 from functools import cache
-from typing import List, Dict, Any, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 import httpx
 
 logger = logging.getLogger(__name__)
 from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
-from app.models import ContentType, FetchRequest
+from app.models import ContentType, FetchRequest, TMDBVideo, Trailer
+
+SearchFn = Callable[[str, Optional[int]], Awaitable[List[Dict[str, Any]]]]
+DetailFn = Callable[[int], Awaitable[Dict[str, Any]]]
+
+
+def pick_trailer(videos: List[TMDBVideo], language: str = "en") -> Optional[Trailer]:
+    """
+    Choose the video to show: YouTube trailers (teasers if there are none), ranked by
+    official, then language match, then resolution, then earliest. Later uploads tend to be
+    re-release and home-video promos, so the earliest is usually the original campaign trailer.
+    """
+    youtube = [v for v in videos if v.site == "YouTube"]
+    candidates = [v for v in youtube if v.type == "Trailer"] or [v for v in youtube if v.type == "Teaser"]
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda v: (
+        v.official,
+        v.iso_639_1 == language,
+        v.size or 0,
+        -v.published_at.timestamp() if v.published_at else float("-inf"),
+    ))
+    return Trailer(key=best.key, name=best.name, official=best.official, language=best.iso_639_1)
 
 
 class TMDBService:
@@ -27,7 +51,7 @@ class TMDBService:
         Search for movies by title and optionally year
         """
         url = f"{self.base_url}/search/movie"
-        params = {"query": query}
+        params: Dict[str, Any] = {"query": query}
         
         if year:
             params["year"] = year
@@ -42,16 +66,25 @@ class TMDBService:
 
     async def get_movie_details(self, movie_id: int) -> Dict[str, Any]:
         """
-        Get detailed information about a movie by its ID
+        Get detailed information about a movie by its ID, including its trailer
         """
-        url = f"{self.base_url}/movie/{movie_id}"
-        
-        response = await self.client.get(url)
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        return {}
+        return await self._get_details(f"{self.base_url}/movie/{movie_id}")
+
+    async def _get_details(self, url: str) -> Dict[str, Any]:
+        """
+        Fetch a movie/show details payload with its videos in the same request, and replace
+        the raw `videos` list with the chosen `trailer` so the dict matches the DB columns.
+        """
+        response = await self.client.get(url, params={"append_to_response": "videos"})
+        if response.status_code != 200:
+            return {}
+
+        data: Dict[str, Any] = response.json()
+        videos = [TMDBVideo.model_validate(v) for v in data.pop("videos", {}).get("results", [])]
+        trailer = pick_trailer(videos)
+        data["trailer"] = trailer.model_dump() if trailer else None
+        data["videos_checked_at"] = datetime.now(timezone.utc).isoformat()
+        return data
 
     async def fetch_movie_data(self, movie_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         """
@@ -99,7 +132,7 @@ class TMDBService:
 
     async def search_shows(self, query: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/search/tv"
-        params = {"query": query}
+        params: Dict[str, Any] = {"query": query}
         if year:
             params["first_air_date_year"] = year
 
@@ -110,11 +143,7 @@ class TMDBService:
         return []
 
     async def get_show_details(self, show_id: int) -> Dict[str, Any]:
-        url = f"{self.base_url}/tv/{show_id}"
-        response = await self.client.get(url)
-        if response.status_code == 200:
-            return response.json()
-        return {}
+        return await self._get_details(f"{self.base_url}/tv/{show_id}")
 
     async def fetch_show_data(self, show_list: List[FetchRequest]) -> List[Dict[str, Any]]:
         results = []
@@ -159,29 +188,22 @@ class TMDBService:
         If no result, falls back to the other type.
         Returns (detail_data, resolved_content_type) or (None, original_type).
         """
-        # Try primary type first
-        if content_type == ContentType.MOVIE:
-            primary_search, fallback_search = self.search_movies, self.search_shows
-            primary_detail, fallback_detail = self.get_movie_details, self.get_show_details
-            fallback_type = ContentType.SHOW
-        else:
-            primary_search, fallback_search = self.search_shows, self.search_movies
-            primary_detail, fallback_detail = self.get_show_details, self.get_movie_details
-            fallback_type = ContentType.MOVIE
+        lookups: Dict[ContentType, Tuple[SearchFn, DetailFn]] = {
+            ContentType.MOVIE: (self.search_movies, self.get_movie_details),
+            ContentType.SHOW: (self.search_shows, self.get_show_details),
+        }
+        fallback_type = ContentType.SHOW if content_type == ContentType.MOVIE else ContentType.MOVIE
 
-        results = await primary_search(title, year)
-        if results:
-            data = await primary_detail(results[0]['id'])
-            if data:
-                return data, content_type
-
-        # Fallback to the other type
-        logger.info("Fallback search for '%s' as %s", title, fallback_type.value)
-        results = await fallback_search(title, year)
-        if results:
-            data = await fallback_detail(results[0]['id'])
-            if data:
-                return data, fallback_type
+        # Try the classified type first, then fall back to the other type
+        for attempt_type in (content_type, fallback_type):
+            if attempt_type == fallback_type:
+                logger.info("Fallback search for '%s' as %s", title, fallback_type.value)
+            search, detail = lookups[attempt_type]
+            results = await search(title, year)
+            if results:
+                data = await detail(results[0]['id'])
+                if data:
+                    return data, attempt_type
 
         return None, content_type
 

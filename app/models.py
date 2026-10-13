@@ -47,6 +47,26 @@ class Collection(BaseModel):
     backdrop_path: Optional[str] = None
 
 
+class TMDBVideo(BaseModel):
+    """One entry of TMDB's /videos results (via append_to_response=videos)."""
+    key: str
+    site: str
+    type: str
+    name: Optional[str] = None
+    official: bool = False
+    iso_639_1: Optional[str] = None
+    size: Optional[int] = None
+    published_at: Optional[datetime] = None
+
+
+class Trailer(BaseModel):
+    """The single video chosen to show for a movie/show. `key` is the YouTube video id."""
+    key: str
+    name: Optional[str] = None
+    official: bool = False
+    language: Optional[str] = None
+
+
 class Movie(BaseModel):
     id: int
     imdb_id: Optional[str] = None
@@ -73,6 +93,8 @@ class Movie(BaseModel):
     production_companies: Optional[List[ProductionCompany]] = []
     production_countries: Optional[List[ProductionCountry]] = []
     spoken_languages: Optional[List[SpokenLanguage]] = []
+    trailer: Optional[Trailer] = None
+    videos_checked_at: Optional[datetime] = None
     last_updated: Optional[datetime] = None
 
     class Config:
@@ -153,6 +175,8 @@ class Show(BaseModel):
     next_episode_to_air: Optional[EpisodeInfo] = None
     in_production: Optional[bool] = None
     type: Optional[str] = None
+    trailer: Optional[Trailer] = None
+    videos_checked_at: Optional[datetime] = None
     last_updated: Optional[datetime] = None
 
     class Config:
