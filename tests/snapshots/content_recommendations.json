@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "ContentRecommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ContentType"
+            }
+          ],
+          "description": "Whether this is a movie or a show"
+        },
+        "reason": {
+          "description": "A brief one-sentence explanation of why this matches the query",
+          "title": "Reason",
+          "type": "string"
+        },
+        "title": {
+          "description": "The title (movie title or show name)",
+          "title": "Title",
+          "type": "string"
+        },
+        "year": {
+          "description": "The release year or first air year",
+          "title": "Year",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "title",
+        "year",
+        "reason",
+        "content_type"
+      ],
+      "title": "ContentRecommendation",
+      "type": "object"
+    },
+    "ContentType": {
+      "description": "What a piece of content IS \u2014 movie or show.",
+      "enum": [
+        "movie",
+        "show"
+      ],
+      "title": "ContentType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "description": "A list of exactly 9 recommendations",
+      "items": {
+        "$ref": "#/$defs/ContentRecommendation"
+      },
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "ContentRecommendations",
+  "type": "object"
+}

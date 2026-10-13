@@ -11,4 +11,4 @@ class ContentRecommendation(BaseModel):
 
 
 class ContentRecommendations(BaseModel):
-    movies: List[ContentRecommendation] = Field(description="A list of exactly 9 recommendations")
+    items: List[ContentRecommendation] = Field(description="A list of exactly 9 recommendations")

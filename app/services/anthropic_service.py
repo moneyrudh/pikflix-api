@@ -1,4 +1,3 @@
-import json
 import logging
 from functools import cache
 from typing import AsyncGenerator
@@ -13,6 +12,7 @@ from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from app.models import ContentTypeMode
 from app.schemas import ContentRecommendation, ContentRecommendations
 from app.prompts import get_recommendation_system_prompt, get_recommendation_user_message
+from app.services.llm_stream import ArrayItemParser
 
 
 class AnthropicService:
@@ -62,10 +62,7 @@ class AnthropicService:
                     }
                 },
             ) as stream:
-                buffer = ""
-                depth = 0
-                in_string = False
-                escaped = False  # previous char was a backslash inside a string
+                parser = ArrayItemParser(ContentRecommendation)
 
                 async for event in stream:
                     if event.type == "content_block_start":
@@ -85,43 +82,10 @@ class AnthropicService:
                     if event.delta.type != "text_delta":
                         continue
 
-                    for ch in event.delta.text:
-                        if in_string:
-                            buffer += ch
-                            if escaped:
-                                escaped = False
-                            elif ch == '\\':
-                                escaped = True
-                            elif ch == '"':
-                                in_string = False
-                            continue
-
-                        if ch == '"' and depth >= 2:
-                            in_string = True
-                            buffer += ch
-                            continue
-
-                        if ch == '{':
-                            depth += 1
-                            if depth == 2:
-                                buffer = '{'
-                            continue
-
-                        if ch == '}' and depth == 2:
-                            buffer += '}'
-                            try:
-                                yield ContentRecommendation.model_validate(json.loads(buffer))
-                            except json.JSONDecodeError:
-                                logger.warning("Failed to parse: %s", buffer)
-                            buffer = ""
-                            depth -= 1
-                            continue
-
-                        if ch == ']':
-                            return
-
-                        if depth >= 2:
-                            buffer += ch
+                    for rec in parser.feed(event.delta.text):
+                        yield rec
+                    if parser.done:
+                        return
 
         except Exception as e:
             logger.error("Error streaming from Anthropic API: %s", e)
