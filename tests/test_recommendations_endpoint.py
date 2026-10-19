@@ -57,3 +57,5 @@ def test_picks_stream_in_completion_order_and_failures_are_isolated():
     assert all(e["type"] == "content" and e["content_type"] == "movie" for e in content)
     # "Broken" is dropped without affecting the others; "Slow" no longer blocks the faster picks.
     assert [e["data"]["title"] for e in content] == ["Fast", "Medium", "Slow"]
+    # Claude's reason is sent on the event, not mixed into the title's data
+    assert all(e["reason"] == "r" and "reason" not in e["data"] for e in content)

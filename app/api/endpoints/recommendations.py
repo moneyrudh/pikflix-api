@@ -79,11 +79,12 @@ async def _resolve_pick(
 
     line = None
     try:
-        item_data["reason"] = rec.reason or ""
         validated = model_class.model_validate(item_data)
+        # `reason` describes this pick, not the title, so it rides on the event rather than in `data`
         line = json.dumps({
             "type": "content",
             "content_type": resolved_type.value,
+            "reason": rec.reason or None,
             "data": validated.model_dump()
         }, default=json_serial) + "\n"
     except Exception as e:
