@@ -1,9 +1,11 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any, Union
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from datetime import date, datetime
 
 
+# The watch subset of `MediaType`. The docstring is part of the schema sent to Claude
+# (see the snapshot test), so notes go here instead.
 class ContentType(str, Enum):
     """What a piece of content IS — movie or show."""
     MOVIE = "movie"
@@ -15,6 +17,28 @@ class ContentTypeMode(str, Enum):
     MOVIE = "movie"
     SHOW = "show"
     BOTH = "both"
+
+
+class MediaType(str, Enum):
+    """Every kind of item PikFlix can recommend. Mirrors the `pikflix.media_type` DB enum."""
+    MOVIE = "movie"
+    SHOW = "show"
+    BOOK = "book"
+    PAPER = "paper"
+
+
+class Shelf(str, Enum):
+    WATCH = "watch"
+    READ = "read"
+
+
+SHELF_MEDIA: Dict[Shelf, frozenset[MediaType]] = {
+    Shelf.WATCH: frozenset({MediaType.MOVIE, MediaType.SHOW}),
+    Shelf.READ: frozenset({MediaType.BOOK, MediaType.PAPER}),
+}
+
+# Media types the search pipeline can serve today. Books and papers join in later phases.
+SUPPORTED_MEDIA: frozenset[MediaType] = SHELF_MEDIA[Shelf.WATCH]
 
 
 class Genre(BaseModel):
@@ -196,9 +220,35 @@ class ConversationTurn(BaseModel):
 
 class UserQuery(BaseModel):
     query: str = Field(..., description="Natural language description of what to watch")
-    content_type: ContentTypeMode = ContentTypeMode.MOVIE
+    media_types: List[MediaType] = Field(default_factory=list, description="Non-empty subset of one shelf")
+    content_type: Optional[ContentTypeMode] = Field(None, description="Legacy: mapped to media_types when those are absent")
     history: Optional[List[ConversationTurn]] = None
     web_search: bool = False
+
+    @model_validator(mode="after")
+    def _resolve_media_types(self) -> "UserQuery":
+        if not self.media_types:
+            mode = self.content_type or ContentTypeMode.MOVIE
+            self.media_types = (
+                [MediaType.MOVIE, MediaType.SHOW] if mode == ContentTypeMode.BOTH else [MediaType(mode.value)]
+            )
+        self.media_types = list(dict.fromkeys(self.media_types))  # dedupe, keep order
+
+        requested = frozenset(self.media_types)
+        if not any(requested <= shelf for shelf in SHELF_MEDIA.values()):
+            raise ValueError("media_types must all come from the same shelf (watch or read)")
+        unsupported = requested - SUPPORTED_MEDIA
+        if unsupported:
+            raise ValueError(f"not supported yet: {', '.join(sorted(m.value for m in unsupported))}")
+        return self
+
+    @property
+    def watch_mode(self) -> ContentTypeMode:
+        """The watch request as the prompt layer's mode (movie, show, or both)."""
+        if len(self.media_types) > 1:
+            return ContentTypeMode.BOTH
+        return ContentTypeMode(self.media_types[0].value)
+
 
 class FetchRequest(BaseModel):
     """Item that needs to be fetched from TMDB — either fresh or cache-expired."""
@@ -223,3 +273,41 @@ class ProviderRequest(BaseModel):
 class ProviderResponse(BaseModel):
     id: int
     results: Dict[str, Any]
+
+
+# --- Recommendation stream (NDJSON). One model per event type; each line is `event.model_dump_json()`.
+
+class InitEvent(BaseModel):
+    type: Literal["init"] = "init"
+    query: str
+    media_types: List[MediaType]
+    content_type: ContentTypeMode  # legacy: what the current client reads
+
+
+class ContentEvent(BaseModel):
+    """Legacy per-result event. Sent alongside `ItemEvent` until the client reads `item`."""
+    type: Literal["content"] = "content"
+    content_type: ContentType
+    reason: Optional[str] = None
+    data: Union[Movie, Show]
+
+
+class ItemEvent(BaseModel):
+    """One result: the item plus why Claude picked it (`reason` describes the pick, not the item)."""
+    type: Literal["item"] = "item"
+    media_type: MediaType
+    reason: Optional[str] = None
+    data: Union[Movie, Show]
+
+
+class DoneEvent(BaseModel):
+    """Last event of a successful stream."""
+    type: Literal["done"] = "done"
+    count: int     # results sent
+    dropped: int   # picks that couldn't be resolved or failed
+
+
+class ErrorEvent(BaseModel):
+    """Last event of a failed stream. Results sent before it are still valid."""
+    type: Literal["error"] = "error"
+    message: str

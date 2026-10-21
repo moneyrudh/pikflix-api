@@ -36,6 +36,7 @@ class AnthropicService:
         Stream content recommendations using structured output.
         Yields individual recommendation dicts as they complete in the stream.
         Each dict has: title, year, reason, content_type.
+        API and network errors propagate, so the caller can tell the client the search failed.
         """
         system_prompt = get_recommendation_system_prompt(content_type)
         user_message = get_recommendation_user_message(query, content_type, history)
@@ -48,48 +49,43 @@ class AnthropicService:
                 "max_uses": 2,
             })
 
-        try:
-            async with self.client.messages.stream(
-                model=self.model,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-                max_tokens=4096,
-                **({"tools": tools} if tools else {}),
-                output_config={
-                    "format": {
-                        "type": "json_schema",
-                        "schema": self._schema,
-                    }
-                },
-            ) as stream:
-                parser = ArrayItemParser(ContentRecommendation)
+        async with self.client.messages.stream(
+            model=self.model,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+            max_tokens=4096,
+            **({"tools": tools} if tools else {}),
+            output_config={
+                "format": {
+                    "type": "json_schema",
+                    "schema": self._schema,
+                }
+            },
+        ) as stream:
+            parser = ArrayItemParser(ContentRecommendation)
 
-                async for event in stream:
-                    if event.type == "content_block_start":
-                        if event.content_block.type == "server_tool_use":
-                            logger.info("Web search triggered: %s", event.content_block.name)
-                        elif event.content_block.type == "web_search_tool_result":
-                            try:
-                                for result in event.content_block.content:
-                                    if result.type == "web_search_result":
-                                        logger.info("Search result: %s — %s", result.title, result.url)
-                            except (AttributeError, TypeError):
-                                pass
-                        continue
+            async for event in stream:
+                if event.type == "content_block_start":
+                    if event.content_block.type == "server_tool_use":
+                        logger.info("Web search triggered: %s", event.content_block.name)
+                    elif event.content_block.type == "web_search_tool_result":
+                        try:
+                            for result in event.content_block.content:
+                                if result.type == "web_search_result":
+                                    logger.info("Search result: %s — %s", result.title, result.url)
+                        except (AttributeError, TypeError):
+                            pass
+                    continue
 
-                    if event.type != "content_block_delta":
-                        continue
-                    if event.delta.type != "text_delta":
-                        continue
+                if event.type != "content_block_delta":
+                    continue
+                if event.delta.type != "text_delta":
+                    continue
 
-                    for rec in parser.feed(event.delta.text):
-                        yield rec
-                    if parser.done:
-                        return
-
-        except Exception as e:
-            logger.error("Error streaming from Anthropic API: %s", e)
-            return
+                for rec in parser.feed(event.delta.text):
+                    yield rec
+                if parser.done:
+                    return
 
     async def close(self) -> None:
         await self.client.close()
