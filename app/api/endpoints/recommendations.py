@@ -1,26 +1,27 @@
-import json
 import logging
-from typing import Optional
+from typing import AsyncGenerator, Optional, Tuple, Union
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.models import UserQuery, Movie, Show, ContentType, ContentTypeMode
+from app.models import (
+    UserQuery, Movie, Show, ContentType, ContentTypeMode, MediaType,
+    InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent,
+)
 from app.schemas import ContentRecommendation
 from app.services.anthropic_service import AnthropicService, get_anthropic_service
+from app.services.llm_stream import ParseStats
 from app.services.supabase_service import SupabaseService, get_supabase_service
 from app.services.tmdb_service import TMDBService, get_tmdb_service
 import asyncio
-from datetime import date, datetime
 
 router = APIRouter()
 
+LLM_ERROR_MESSAGE = "Couldn't get recommendations right now. Please try again."
 
-def json_serial(obj):
-    """JSON serializer for objects not serializable by default json code"""
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    raise TypeError(f"Type {type(obj)} not serializable")
+
+def _line(event: Union[InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent]) -> str:
+    return event.model_dump_json() + "\n"
 
 
 async def _cache_providers(tmdb_service: TMDBService, supabase_service: SupabaseService, content_id: int, content_type: ContentType):
@@ -38,8 +39,8 @@ async def _resolve_pick(
     request_mode: ContentTypeMode,
     supabase_service: SupabaseService,
     tmdb_service: TMDBService,
-) -> Optional[str]:
-    """Resolve one recommendation (cache first, TMDB on miss) into an NDJSON line, or None if not found."""
+) -> Optional[Tuple[ContentType, Union[Movie, Show]]]:
+    """Resolve one recommendation (cache first, TMDB on miss), or None if not found."""
     if request_mode == ContentTypeMode.BOTH:
         # Use Claude's per-item classification
         rec_type = ContentType(rec.content_type)
@@ -77,16 +78,9 @@ async def _resolve_pick(
     if not item_data:
         return None
 
-    line = None
+    validated: Optional[Union[Movie, Show]] = None
     try:
         validated = model_class.model_validate(item_data)
-        # `reason` describes this pick, not the title, so it rides on the event rather than in `data`
-        line = json.dumps({
-            "type": "content",
-            "content_type": resolved_type.value,
-            "reason": rec.reason or None,
-            "data": validated.model_dump()
-        }, default=json_serial) + "\n"
     except Exception as e:
         logger.error("Error processing %s '%s': %s", resolved_type.value, rec.title, e)
 
@@ -95,7 +89,7 @@ async def _resolve_pick(
         asyncio.create_task(supabase_service.save_content([item_data], resolved_type))
         asyncio.create_task(_cache_providers(tmdb_service, supabase_service, item_data["id"], resolved_type))
 
-    return line
+    return (resolved_type, validated) if validated else None
 
 
 @router.post("/")
@@ -105,31 +99,51 @@ async def get_recommendations_stream(
     supabase_service: SupabaseService = Depends(get_supabase_service),
     tmdb_service: TMDBService = Depends(get_tmdb_service)
 ):
-    request_mode = query.content_type
+    request_mode = query.watch_mode
 
-    async def generate():
-        yield json.dumps({"type": "init", "query": query.query, "content_type": request_mode.value}) + "\n"
+    async def generate() -> AsyncGenerator[str, None]:
+        yield _line(InitEvent(query=query.query, media_types=query.media_types, content_type=request_mode))
 
         # Each pick is resolved in its own task as soon as Claude emits it, so a slow cache/TMDB
         # lookup doesn't hold up later picks. Results are streamed in completion order.
         lines: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        sent = dropped = 0
+        parse_stats = ParseStats()  # picks Claude emitted that failed validation also count as dropped
 
         async def resolve(rec: ContentRecommendation) -> None:
+            nonlocal sent, dropped
             try:
-                line = await _resolve_pick(rec, request_mode, supabase_service, tmdb_service)
-            except Exception as e:
-                logger.error("Error resolving '%s': %s", rec.title, e)
+                resolved = await _resolve_pick(rec, request_mode, supabase_service, tmdb_service)
+            except Exception:
+                logger.exception("Error resolving '%s'", rec.title)
+                resolved = None
+            if resolved is None:
+                dropped += 1
                 return
-            if line:
-                await lines.put(line)
+            content_type, item = resolved
+            sent += 1
+            reason = rec.reason or None
+            await lines.put(_line(ItemEvent(media_type=MediaType(content_type.value), reason=reason, data=item)))
+            await lines.put(_line(ContentEvent(content_type=content_type, reason=reason, data=item)))
 
         async def produce() -> None:
+            llm_error: Optional[Exception] = None
             try:
                 async with asyncio.TaskGroup() as tg:
-                    async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode, query.web_search):
-                        tg.create_task(resolve(rec))
-            except Exception as e:
-                logger.error("Error producing recommendations: %s", e)
+                    try:
+                        async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode, query.web_search, stats=parse_stats):
+                            tg.create_task(resolve(rec))
+                    except Exception as e:
+                        # Caught inside the group so picks already in flight still finish and get sent
+                        llm_error = e
+                if llm_error:
+                    logger.error("Error streaming recommendations from Claude", exc_info=llm_error)
+                    await lines.put(_line(ErrorEvent(message=LLM_ERROR_MESSAGE)))
+                else:
+                    await lines.put(_line(DoneEvent(count=sent, dropped=dropped + parse_stats.skipped)))
+            except Exception:
+                logger.exception("Error producing recommendations")
+                await lines.put(_line(ErrorEvent(message=LLM_ERROR_MESSAGE)))
             finally:
                 await lines.put(None)  # end of stream
 
