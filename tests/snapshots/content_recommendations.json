@@ -4,12 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "content_type": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/ContentType"
-            }
-          ],
-          "description": "Whether this is a movie or a show"
+          "$ref": "#/$defs/ContentType"
         },
         "reason": {
           "description": "A brief one-sentence explanation of why this matches the query",
