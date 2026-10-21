@@ -69,8 +69,10 @@ def test_only_the_target_key_is_parsed():
 
 def test_invalid_elements_are_skipped():
     text = json.dumps({"items": [rec("A"), {"title": "missing fields"}, rec("B")]})
-    items = ArrayItemParser(ContentRecommendation).feed(text)
+    parser = ArrayItemParser(ContentRecommendation)
+    items = parser.feed(text)
     assert [r.title for r in items] == ["A", "B"]
+    assert parser.stats.skipped == 1  # so the endpoint can report it as dropped
 
 
 def test_stops_after_array_closes():

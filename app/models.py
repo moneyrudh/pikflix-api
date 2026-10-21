@@ -227,7 +227,10 @@ class UserQuery(BaseModel):
 
     @model_validator(mode="after")
     def _resolve_media_types(self) -> "UserQuery":
-        if not self.media_types:
+        if "media_types" in self.model_fields_set:
+            if not self.media_types:
+                raise ValueError("media_types must not be empty")
+        else:
             mode = self.content_type or ContentTypeMode.MOVIE
             self.media_types = (
                 [MediaType.MOVIE, MediaType.SHOW] if mode == ContentTypeMode.BOTH else [MediaType(mode.value)]

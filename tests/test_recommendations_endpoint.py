@@ -19,8 +19,11 @@ DELAYS = {"Slow": 0.3, "Fast": 0.0, "Medium": 0.1, "Broken": 0.0}
 
 class FakeAnthropic:
     fail_after: int | None = None  # raise after yielding this many picks, like a dropped connection
+    invalid_picks = 0                # picks the parser would have rejected
 
-    async def get_recommendations(self, *args, **kwargs) -> AsyncGenerator[ContentRecommendation, None]:
+    async def get_recommendations(self, *args, stats=None, **kwargs) -> AsyncGenerator[ContentRecommendation, None]:
+        if stats is not None:
+            stats.skipped += self.invalid_picks
         for i, title in enumerate(DELAYS):
             if i == self.fail_after:
                 raise RuntimeError("overloaded")
@@ -43,9 +46,10 @@ async def post_stream(body: dict) -> List[dict]:
     return [json.loads(line) for line in response.text.splitlines()]
 
 
-def stream_lines(body: dict, fail_after: int | None = None) -> List[dict]:
+def stream_lines(body: dict, fail_after: int | None = None, invalid_picks: int = 0) -> List[dict]:
     anthropic = FakeAnthropic()
     anthropic.fail_after = fail_after
+    anthropic.invalid_picks = invalid_picks
     app.dependency_overrides = {
         get_anthropic_service: lambda: anthropic,
         get_supabase_service: FakeSupabase,
@@ -82,6 +86,11 @@ def test_each_result_is_sent_as_item_and_legacy_content_then_done():
     assert events[-1] == {"type": "done", "count": 3, "dropped": 1}
 
 
+def test_picks_the_parser_rejected_count_as_dropped():
+    events = stream_lines({"query": "anything"}, invalid_picks=2)
+    assert events[-1] == {"type": "done", "count": 3, "dropped": 3}  # 1 failed lookup + 2 invalid picks
+
+
 def test_llm_failure_sends_error_after_picks_already_in_flight():
     # Claude yields Slow and Fast, then the stream dies. Both picks still resolve and get sent.
     events = stream_lines({"query": "anything"}, fail_after=2)
@@ -110,6 +119,7 @@ def test_media_types_win_over_legacy_field_and_are_deduped():
 
 
 @pytest.mark.parametrize("media_types, message", [
+    ([], "must not be empty"),  # sent but empty: not silently treated as legacy "movie"
     ([MediaType.MOVIE, MediaType.BOOK], "same shelf"),
     ([MediaType.BOOK], "not supported yet: book"),
 ])

@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import dataclass
 from typing import Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -7,6 +8,12 @@ from pydantic import BaseModel, ValidationError
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+
+@dataclass
+class ParseStats:
+    """Counters a caller can pass in to see what the parser threw away."""
+    skipped: int = 0  # elements that weren't valid JSON or didn't match the model
 
 
 class ArrayItemParser(Generic[T]):
@@ -19,8 +26,9 @@ class ArrayItemParser(Generic[T]):
     contain nested objects and lists.
     """
 
-    def __init__(self, model: Type[T], key: str = "items") -> None:
+    def __init__(self, model: Type[T], key: str = "items", stats: Optional[ParseStats] = None) -> None:
         self._model = model
+        self.stats = stats if stats is not None else ParseStats()
         self._key = key
         self._depth = 0
         self._in_string = False
@@ -84,4 +92,5 @@ class ArrayItemParser(Generic[T]):
             return self._model.model_validate(json.loads(raw))
         except (json.JSONDecodeError, ValidationError) as e:
             logger.warning("Skipping invalid %s: %s (%s)", self._model.__name__, raw, e)
+            self.stats.skipped += 1
             return None
