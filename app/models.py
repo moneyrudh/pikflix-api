@@ -102,6 +102,7 @@ class Movie(BaseModel):
     status: Optional[str] = None
     release_date: Optional[date] = None
     adult: Optional[bool] = False
+    softcore: Optional[bool] = False
     budget: Optional[int] = 0
     revenue: Optional[int] = 0
     runtime: Optional[int] = None
@@ -180,6 +181,7 @@ class Show(BaseModel):
     number_of_episodes: Optional[int] = None
     episode_run_time: Optional[List[int]] = []
     adult: Optional[bool] = False
+    softcore: Optional[bool] = False
     vote_average: Optional[float] = 0.0
     vote_count: Optional[int] = 0
     popularity: Optional[float] = 0.0
