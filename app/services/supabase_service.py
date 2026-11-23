@@ -29,7 +29,7 @@ class SupabaseService:
         self._client: Optional[AsyncClient] = None
         self._client_lock = asyncio.Lock()
 
-    async def _db(self) -> AsyncClient:
+    async def db(self) -> AsyncClient:
         if self._client is None:
             assert SUPABASE_URL and SUPABASE_KEY  # config.py exits at startup when these are missing
             async with self._client_lock:
@@ -48,7 +48,7 @@ class SupabaseService:
     async def get_content_by_title(self, title: str, year: Optional[int], content_type: ContentType) -> Optional[Dict[str, Any]]:
         """The cached row for an exact title (and release year, when given), fresh or not.
         Branches column names on content_type (title/release_date vs name/first_air_date)."""
-        db = await self._db()
+        db = await self.db()
         title_col = "name" if content_type == ContentType.SHOW else "title"
         date_col = "first_air_date" if content_type == ContentType.SHOW else "release_date"
         query = db.table(self._table_for(content_type)).select("*").eq(title_col, title)
@@ -59,7 +59,7 @@ class SupabaseService:
 
     async def get_content_by_id(self, content_id: int, content_type: ContentType) -> Optional[Dict[str, Any]]:
         """The cached row for a TMDB id, fresh or not."""
-        db = await self._db()
+        db = await self.db()
         result = await db.table(self._table_for(content_type)).select("*").eq("id", content_id).limit(1).execute()
         return result.data[0] if result.data else None
 
@@ -69,7 +69,7 @@ class SupabaseService:
         return _is_fresh(row, CACHE_DURATION) and row.get("videos_checked_at") is not None
 
     async def save_content(self, items: List[Dict[str, Any]], content_type: ContentType) -> None:
-        db = await self._db()
+        db = await self.db()
         table = self._table_for(content_type)
         for item in items:
             try:
@@ -98,7 +98,7 @@ class SupabaseService:
         return copy
 
     async def get_providers(self, content_id: int, content_type: ContentType, region: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        db = await self._db()
+        db = await self.db()
         query = db.table("providers").select("*").eq("content_id", content_id).eq("content_type", content_type.value)
         result = await query.execute()
 
@@ -128,7 +128,7 @@ class SupabaseService:
 
     async def save_providers(self, content_id: int, content_type: ContentType, provider_data: Dict[str, Any]) -> None:
         try:
-            db = await self._db()
+            db = await self.db()
             data = {
                 "content_id": content_id,
                 "content_type": content_type.value,
@@ -150,14 +150,14 @@ class SupabaseService:
 
     async def get_book_by_lookup_key(self, key: str) -> Optional[Book]:
         """A cached book matching a pick's lookup key (see openlibrary_service.lookup_key), if still fresh."""
-        db = await self._db()
+        db = await self.db()
         result = await (db.table("books").select("*").eq("lookup_key", key)
                         .gte("last_updated", _fresh_after(BOOK_CACHE_DURATION).isoformat())
                         .order("edition_count", desc=True).limit(1).execute())
         return Book.model_validate(result.data[0]) if result.data else None
 
     async def get_book(self, book_id: str) -> Optional[Book]:
-        db = await self._db()
+        db = await self.db()
         result = await db.table("books").select("*").eq("id", book_id).limit(1).execute()
         return Book.model_validate(result.data[0]) if result.data else None
 
@@ -165,7 +165,7 @@ class SupabaseService:
         """Upsert a book found by search. Search results never carry the description, so those columns
         are left out: a refresh keeps a description fetched earlier."""
         try:
-            db = await self._db()
+            db = await self.db()
             row = book.model_dump(mode="json", exclude={"last_updated", "description", "description_checked_at"})
             row["lookup_key"] = key
             row["last_updated"] = datetime.now(timezone.utc).isoformat()
@@ -176,7 +176,7 @@ class SupabaseService:
 
     async def save_book_description(self, book_id: str, description: Optional[str]) -> None:
         try:
-            db = await self._db()
+            db = await self.db()
             await db.table("books").update({
                 "description": description,
                 "description_checked_at": datetime.now(timezone.utc).isoformat(),

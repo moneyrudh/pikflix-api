@@ -457,3 +457,29 @@ class ErrorEvent(BaseModel):
     """Last event of a failed stream. Results sent before it are still valid."""
     type: Literal["error"] = "error"
     message: str
+
+
+# --- Agent chats
+
+class ChatSession(BaseModel):
+    """A conversation with the agent, owned by one (possibly anonymous) user."""
+    id: str
+    owner_id: str
+    title: str
+    seen_refs: List[str] = []
+    created_at: datetime
+    last_active_at: datetime
+
+
+class ChatSessionSummary(BaseModel):
+    """What the sidebar lists."""
+    id: str
+    title: str
+    last_active_at: datetime
+
+
+class ChatMessage(BaseModel):
+    """One Messages API message, stored verbatim (content blocks as JSON) so a turn replays exactly."""
+    seq: int
+    role: Literal["user", "assistant"]
+    content: List[Dict[str, Any]]
