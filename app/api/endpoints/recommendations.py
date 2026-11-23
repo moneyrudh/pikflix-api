@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, Optional, Tuple, Union
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
@@ -62,56 +62,49 @@ async def _resolve_pick(
     supabase_service: SupabaseService,
     tmdb_service: TMDBService,
 ) -> Optional[Tuple[ContentType, Union[Movie, Show]]]:
-    """Resolve one recommendation (cache first, TMDB on miss), or None if not found."""
-    if request_mode == ContentTypeMode.BOTH:
-        # Use Claude's per-item classification
-        rec_type = ContentType(rec.content_type)
+    """
+    Resolve one recommendation to a movie or show, cheapest source first:
+    1. Exact title + year in the cache. Fresh: done, no TMDB calls.
+    2. Otherwise the TMDB id (the stale row's, or a search with movie/show fallback), then the cache by id.
+       Claude often words a title differently from how it's cached ("Star Wars: Episode IV - A New Hope"
+       vs "Star Wars"); the search finds the same id, so a fresh row costs one search, not a refetch.
+    3. Otherwise TMDB details, cached in the background along with watch providers.
+    Returns None if TMDB has no match.
+    """
+    # Explicit mode ignores Claude's classification; "both" uses it
+    resolved_type = ContentType(rec.content_type) if request_mode == ContentTypeMode.BOTH else ContentType(request_mode.value)
+
+    row = await supabase_service.get_content_by_title(rec.title, rec.year, resolved_type)
+    if row is not None and supabase_service.is_fresh_content(row):
+        return _validated(row, resolved_type, rec.title)
+
+    if row is not None:
+        content_id = row["id"]  # stale: refresh it by id, no search needed
     else:
-        # Explicit mode — ignore Claude's classification, use request type
-        rec_type = ContentType(request_mode.value)
+        found = await tmdb_service.find_id(rec.title, rec.year, resolved_type)
+        if found is None:
+            return None
+        content_id, resolved_type = found
+        row = await supabase_service.get_content_by_id(content_id, resolved_type)
+        if row is not None and supabase_service.is_fresh_content(row):
+            return _validated(row, resolved_type, rec.title)
 
-    model_class = Show if rec_type == ContentType.SHOW else Movie
-
-    # Check Supabase cache first
-    cache_result = await supabase_service.get_content_by_titles([rec], rec_type)
-
-    item_data = None
-    resolved_type = rec_type
-
-    if cache_result.found:
-        item_data = cache_result.found[0]
-    elif cache_result.to_fetch:
-        fetch_item = cache_result.to_fetch[0]
-
-        if fetch_item.id:
-            # Direct fetch by cached ID
-            fetched = await tmdb_service.fetch_content_data([fetch_item], rec_type)
-            if fetched:
-                item_data = fetched[0]
-        else:
-            # Search TMDB with fallback to other type
-            data, resolved_type = await tmdb_service.search_content(
-                fetch_item.title, fetch_item.year, rec_type
-            )
-            if data:
-                item_data = data
-                model_class = Show if resolved_type == ContentType.SHOW else Movie
-
-    if not item_data:
+    details = await tmdb_service.get_details(content_id, resolved_type)
+    if not details:
         return None
+    # Background: cache content and providers, never blocking the response
+    asyncio.create_task(supabase_service.save_content([details], resolved_type))
+    asyncio.create_task(_cache_providers(tmdb_service, supabase_service, content_id, resolved_type))
+    return _validated(details, resolved_type, rec.title)
 
-    validated: Optional[Union[Movie, Show]] = None
+
+def _validated(data: Dict[str, Any], content_type: ContentType, title: str) -> Optional[Tuple[ContentType, Union[Movie, Show]]]:
+    model_class = Show if content_type == ContentType.SHOW else Movie
     try:
-        validated = model_class.model_validate(item_data)
+        return content_type, model_class.model_validate(data)
     except Exception as e:
-        logger.error("Error processing %s '%s': %s", resolved_type.value, rec.title, e)
-
-    # Background: cache content and providers (only if freshly fetched)
-    if cache_result.to_fetch:
-        asyncio.create_task(supabase_service.save_content([item_data], resolved_type))
-        asyncio.create_task(_cache_providers(tmdb_service, supabase_service, item_data["id"], resolved_type))
-
-    return (resolved_type, validated) if validated else None
+        logger.error("Error processing %s '%s': %s", content_type.value, title, e)
+        return None
 
 
 @router.post("/")
