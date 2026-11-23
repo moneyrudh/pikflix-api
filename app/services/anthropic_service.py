@@ -1,22 +1,28 @@
 import logging
 from functools import cache
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Type, TypeVar
 
 logger = logging.getLogger(__name__)
 
 import anthropic
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 from app.models import ContentTypeMode
-from app.schemas import ContentRecommendation, ContentRecommendations
-from app.prompts import get_recommendation_system_prompt, get_recommendation_user_message
+from app.schemas import BookPick, BookPicks, ContentRecommendation, ContentRecommendations
+from app.prompts import (
+    get_book_system_prompt, get_book_user_message,
+    get_recommendation_system_prompt, get_recommendation_user_message,
+)
 from app.services.llm_stream import ArrayItemParser, ParseStats
 
 
 class IncompleteRecommendationsError(RuntimeError):
     """Claude's response ended before the `items` array closed (token limit, refusal, dropped stream)."""
+
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class AnthropicService:
@@ -28,25 +34,36 @@ class AnthropicService:
             http_client=httpx.AsyncClient(http2=True)
         )
         self.model = ANTHROPIC_MODEL
-        self._schema = self._build_schema()
+        self._schemas = {wrapper: self.build_schema(wrapper) for wrapper in (ContentRecommendations, BookPicks)}
 
     @staticmethod
-    def _build_schema() -> dict:
-        adapter = TypeAdapter(ContentRecommendations)
-        return anthropic.transform_schema(adapter.json_schema())
+    def build_schema(wrapper: Type[BaseModel]) -> dict:
+        """The structured-output schema sent to Claude for a `{"items": [...]}` wrapper model."""
+        return anthropic.transform_schema(TypeAdapter(wrapper).json_schema())
 
-    async def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE, web_search: bool = False, stats: ParseStats | None = None) -> AsyncGenerator[ContentRecommendation, None]:
+    def get_recommendations(self, query: str, history: list | None = None, content_type: ContentTypeMode = ContentTypeMode.MOVIE, web_search: bool = False, stats: ParseStats | None = None) -> AsyncGenerator[ContentRecommendation, None]:
+        """Stream movie/show picks (title, year, reason, content_type) as each one completes."""
+        return self._stream_items(
+            get_recommendation_system_prompt(content_type),
+            get_recommendation_user_message(query, content_type, history),
+            ContentRecommendation, ContentRecommendations, web_search, stats,
+        )
+
+    def get_book_picks(self, query: str, history: list | None = None, web_search: bool = False, stats: ParseStats | None = None) -> AsyncGenerator[BookPick, None]:
+        """Stream book picks (title, author, year, reason) as each one completes."""
+        return self._stream_items(
+            get_book_system_prompt(), get_book_user_message(query, history),
+            BookPick, BookPicks, web_search, stats,
+        )
+
+    async def _stream_items(self, system_prompt: str, user_message: str, item: Type[T], wrapper: Type[BaseModel], web_search: bool, stats: ParseStats | None) -> AsyncGenerator[T, None]:
         """
-        Stream content recommendations using structured output.
-        Yields individual recommendation dicts as they complete in the stream.
-        Each dict has: title, year, reason, content_type.
+        Stream structured output shaped like `wrapper` ({"items": [...]}) and yield each element as
+        an `item` the moment it completes.
         API and network errors propagate, and a response that ends before the list closes raises
         IncompleteRecommendationsError, so the caller can tell the client the search failed.
-        Pass `stats` to see how many picks were skipped as invalid.
+        Pass `stats` to see how many elements were skipped as invalid.
         """
-        system_prompt = get_recommendation_system_prompt(content_type)
-        user_message = get_recommendation_user_message(query, content_type, history)
-
         tools = []
         if web_search:
             tools.append({
@@ -64,11 +81,11 @@ class AnthropicService:
             output_config={
                 "format": {
                     "type": "json_schema",
-                    "schema": self._schema,
+                    "schema": self._schemas[wrapper],
                 }
             },
         ) as stream:
-            parser = ArrayItemParser(ContentRecommendation, stats=stats)
+            parser = ArrayItemParser(item, stats=stats)
             stop_reason = None
 
             async for event in stream:
@@ -92,8 +109,8 @@ class AnthropicService:
                 if event.delta.type != "text_delta":
                     continue
 
-                for rec in parser.feed(event.delta.text):
-                    yield rec
+                for element in parser.feed(event.delta.text):
+                    yield element
                 if parser.done:
                     return
 

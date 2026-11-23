@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone, date
 
 logger = logging.getLogger(__name__)
 from supabase import AsyncClient, AsyncClientOptions, acreate_client
-from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION, PROVIDER_CACHE_DURATION
-from app.models import ContentType, FetchRequest, CacheResult
+from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION, PROVIDER_CACHE_DURATION, BOOK_CACHE_DURATION
+from app.models import Book, ContentType, FetchRequest, CacheResult
 from app.schemas import ContentRecommendation
 
 class SupabaseService:
@@ -162,6 +162,43 @@ class SupabaseService:
             logger.info("Saved providers for %s ID: %s", content_type.value, content_id)
         except Exception as e:
             logger.error("Error saving providers for %s ID %s: %s (%s)", content_type.value, content_id, e, e.__class__.__name__)
+
+    async def get_book_by_lookup_key(self, key: str) -> Optional[Book]:
+        """A cached book matching a pick's lookup key (see openlibrary_service.lookup_key), if still fresh."""
+        db = await self._db()
+        fresh_after = datetime.now(timezone.utc) - timedelta(hours=BOOK_CACHE_DURATION)
+        result = await (db.table("books").select("*").eq("lookup_key", key)
+                        .gte("last_updated", fresh_after.isoformat())
+                        .order("edition_count", desc=True).limit(1).execute())
+        return Book.model_validate(result.data[0]) if result.data else None
+
+    async def get_book(self, book_id: str) -> Optional[Book]:
+        db = await self._db()
+        result = await db.table("books").select("*").eq("id", book_id).limit(1).execute()
+        return Book.model_validate(result.data[0]) if result.data else None
+
+    async def save_book(self, book: Book, key: str) -> None:
+        """Upsert a book found by search. Search results never carry the description, so those columns
+        are left out: a refresh keeps a description fetched earlier."""
+        try:
+            db = await self._db()
+            row = book.model_dump(mode="json", exclude={"last_updated", "description", "description_checked_at"})
+            row["lookup_key"] = key
+            row["last_updated"] = datetime.now(timezone.utc).isoformat()
+            await db.table("books").upsert(row).execute()
+            logger.info("Saved book: %s", book.title)
+        except Exception as e:
+            logger.error("Error saving book %s: %s (%s)", book.title, e, e.__class__.__name__)
+
+    async def save_book_description(self, book_id: str, description: Optional[str]) -> None:
+        try:
+            db = await self._db()
+            await db.table("books").update({
+                "description": description,
+                "description_checked_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", book_id).execute()
+        except Exception as e:
+            logger.error("Error saving description for book %s: %s (%s)", book_id, e, e.__class__.__name__)
 
     async def close(self) -> None:
         if self._client is not None:
