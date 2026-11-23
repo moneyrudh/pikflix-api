@@ -11,6 +11,8 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 TMDB_READ_ACCESS_TOKEN = os.getenv("TMDB_READ_ACCESS_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Optional. Open Library gives identified clients (app name + contact in the User-Agent) 3 req/s instead of 1.
+OPENLIBRARY_CONTACT = os.getenv("OPENLIBRARY_CONTACT")
 
 # Validate required env vars
 _required = {
@@ -27,6 +29,11 @@ if _missing:
 # Cache settings (in hours)
 CACHE_DURATION = 24 * 7  # 1 week default cache
 PROVIDER_CACHE_DURATION = 24  # streaming availability changes often
+BOOK_CACHE_DURATION = 24 * 30  # book metadata is effectively static
+
+# Books: ask Claude for extra picks so ones that fail verification don't leave the user short
+BOOK_PICKS_REQUESTED = 12
+BOOK_RESULTS_SHOWN = 9
 
 # Anthropic API settings
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
@@ -39,3 +46,7 @@ CORS_ORIGINS = [
 
 # API Base URLs
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
+OPENLIBRARY_BASE_URL = "https://openlibrary.org"
+OPENLIBRARY_USER_AGENT = "PikFlix/1.0 (https://pikflix.app" + (f"; {OPENLIBRARY_CONTACT})" if OPENLIBRARY_CONTACT else ")")
+# Open Library's published limits; shared by every request this process makes
+OPENLIBRARY_REQUESTS_PER_SECOND = 3 if OPENLIBRARY_CONTACT else 1

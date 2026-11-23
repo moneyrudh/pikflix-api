@@ -2,9 +2,10 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import recommendations, providers
+from app.api.endpoints import books, recommendations, providers
 from app.config import CORS_ORIGINS
 from app.services.anthropic_service import get_anthropic_service
+from app.services.openlibrary_service import get_openlibrary_service
 from app.services.supabase_service import get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
 
@@ -32,7 +33,7 @@ logging.basicConfig(level=logging.INFO, handlers=[handler])
 async def lifespan(_: FastAPI):
     yield
     # Services are shared for the app's lifetime; close their connection pools on shutdown.
-    for service in (get_anthropic_service(), get_tmdb_service(), get_supabase_service()):
+    for service in (get_anthropic_service(), get_tmdb_service(), get_supabase_service(), get_openlibrary_service()):
         await service.close()
 
 
@@ -55,6 +56,7 @@ app.add_middleware(
 # Include routers
 app.include_router(recommendations.router, prefix="/api/recommendations", tags=["recommendations"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
+app.include_router(books.router, prefix="/api/books", tags=["books"])
 
 @app.get("/health")
 async def health_check():

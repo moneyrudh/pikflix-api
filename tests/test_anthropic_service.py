@@ -4,6 +4,7 @@ from typing import List
 
 import pytest
 
+from app.schemas import BookPicks, ContentRecommendations
 from app.services.anthropic_service import AnthropicService, IncompleteRecommendationsError
 from app.services.llm_stream import ParseStats
 
@@ -39,7 +40,7 @@ class FakeStream:
 def service_streaming(events: List[SimpleNamespace]) -> AnthropicService:
     service = AnthropicService.__new__(AnthropicService)  # skip the real client
     service.model = "test"
-    service._schema = {}
+    service._schemas = {ContentRecommendations: {}, BookPicks: {}}
     service.client = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kwargs: FakeStream(events)))
     return service
 

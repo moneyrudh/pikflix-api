@@ -4,13 +4,15 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
+from app.config import BOOK_RESULTS_SHOWN
 from app.models import (
-    UserQuery, Movie, Show, ContentType, ContentTypeMode, MediaType,
+    UserQuery, Book, Movie, Show, ContentType, ContentTypeMode, MediaType, Shelf,
     InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent,
 )
-from app.schemas import ContentRecommendation
+from app.schemas import BookPick, ContentRecommendation
 from app.services.anthropic_service import AnthropicService, get_anthropic_service
 from app.services.llm_stream import ParseStats
+from app.services.openlibrary_service import OpenLibraryService, get_openlibrary_service, display_title, lookup_key
 from app.services.supabase_service import SupabaseService, get_supabase_service
 from app.services.tmdb_service import TMDBService, get_tmdb_service
 import asyncio
@@ -20,8 +22,28 @@ router = APIRouter()
 LLM_ERROR_MESSAGE = "Couldn't get recommendations right now. Please try again."
 
 
+class _EnoughResults(Exception):
+    """Raised by the task that sends the last result needed; cancels the rest of the search."""
+
+
 def _line(event: Union[InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent]) -> str:
     return event.model_dump_json() + "\n"
+
+
+async def _resolve_book(pick: BookPick, openlibrary: OpenLibraryService, supabase_service: SupabaseService) -> Optional[Book]:
+    """Cache first, then Open Library search + verification. None when no result is verifiably the book."""
+    cached = await supabase_service.get_book_by_lookup_key(lookup_key(pick.title, pick.author))
+    if cached is not None:
+        return cached
+    doc = await openlibrary.find_book(pick)
+    if doc is None:
+        return None
+    # Show the title that matched (a translated work's English edition title, not "L'étranger")
+    book = doc.to_book(title=display_title(pick, doc))
+    # Keyed by that title and the catalogue's author, so later picks worded differently still hit the cache
+    asyncio.create_task(supabase_service.save_book(
+        book, lookup_key(book.title, doc.author_name[0] if doc.author_name else pick.author)))
+    return book
 
 
 async def _cache_providers(tmdb_service: TMDBService, supabase_service: SupabaseService, content_id: int, content_type: ContentType):
@@ -97,9 +119,13 @@ async def get_recommendations_stream(
     query: UserQuery,
     anthropic_service: AnthropicService = Depends(get_anthropic_service),
     supabase_service: SupabaseService = Depends(get_supabase_service),
-    tmdb_service: TMDBService = Depends(get_tmdb_service)
+    tmdb_service: TMDBService = Depends(get_tmdb_service),
+    openlibrary: OpenLibraryService = Depends(get_openlibrary_service),
 ):
-    request_mode = query.watch_mode
+    reading = query.shelf == Shelf.READ
+    request_mode = None if reading else query.watch_mode
+    # Books ask Claude for extra picks and stop once enough are verified; watch shows every pick
+    limit = BOOK_RESULTS_SHOWN if reading else None
 
     async def generate() -> AsyncGenerator[str, None]:
         yield _line(InitEvent(query=query.query, media_types=query.media_types, content_type=request_mode))
@@ -110,32 +136,55 @@ async def get_recommendations_stream(
         sent = dropped = 0
         parse_stats = ParseStats()  # picks Claude emitted that failed validation also count as dropped
 
-        async def resolve(rec: ContentRecommendation) -> None:
+        async def resolve(pick: Union[ContentRecommendation, BookPick]) -> None:
             nonlocal sent, dropped
+            item: Union[Movie, Show, Book, None] = None
+            legacy_type: Optional[ContentType] = None  # watch results also go out as the legacy `content` event
             try:
-                resolved = await _resolve_pick(rec, request_mode, supabase_service, tmdb_service)
+                if isinstance(pick, BookPick):
+                    item = await _resolve_book(pick, openlibrary, supabase_service)
+                    media_type = MediaType.BOOK
+                else:
+                    assert request_mode is not None
+                    resolved = await _resolve_pick(pick, request_mode, supabase_service, tmdb_service)
+                    if resolved is not None:
+                        legacy_type, item = resolved
+                        media_type = MediaType(legacy_type.value)
             except Exception:
-                logger.exception("Error resolving '%s'", rec.title)
-                resolved = None
-            if resolved is None:
+                logger.exception("Error resolving '%s'", pick.title)
+            if item is None:
                 dropped += 1
                 return
-            content_type, item = resolved
+            if limit is not None and sent >= limit:
+                return  # finished just after the last needed result; not a failure
             sent += 1
-            reason = rec.reason or None
-            await lines.put(_line(ItemEvent(media_type=MediaType(content_type.value), reason=reason, data=item)))
-            await lines.put(_line(ContentEvent(content_type=content_type, reason=reason, data=item)))
+            reason = pick.reason or None
+            await lines.put(_line(ItemEvent(media_type=media_type, reason=reason, data=item)))
+            if legacy_type is not None and not isinstance(item, Book):
+                await lines.put(_line(ContentEvent(content_type=legacy_type, reason=reason, data=item)))
+            if limit is not None and sent >= limit:
+                raise _EnoughResults
+
+        picks: AsyncGenerator[Union[ContentRecommendation, BookPick], None]
+        if reading:
+            picks = anthropic_service.get_book_picks(query.query, query.history, query.web_search, stats=parse_stats)
+        else:
+            assert request_mode is not None
+            picks = anthropic_service.get_recommendations(query.query, query.history, request_mode, query.web_search, stats=parse_stats)
 
         async def produce() -> None:
             llm_error: Optional[Exception] = None
             try:
-                async with asyncio.TaskGroup() as tg:
-                    try:
-                        async for rec in anthropic_service.get_recommendations(query.query, query.history, request_mode, query.web_search, stats=parse_stats):
-                            tg.create_task(resolve(rec))
-                    except Exception as e:
-                        # Caught inside the group so picks already in flight still finish and get sent
-                        llm_error = e
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        try:
+                            async for pick in picks:
+                                tg.create_task(resolve(pick))
+                        except Exception as e:
+                            # Caught inside the group so picks already in flight still finish and get sent
+                            llm_error = e
+                except* _EnoughResults:
+                    pass  # enough results: Claude's stream and the remaining lookups were cancelled
                 if llm_error:
                     logger.error("Error streaming recommendations from Claude", exc_info=llm_error)
                     await lines.put(_line(ErrorEvent(message=LLM_ERROR_MESSAGE)))

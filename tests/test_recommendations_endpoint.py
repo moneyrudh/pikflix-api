@@ -10,6 +10,7 @@ from app.main import app
 from app.models import CacheResult, ContentType, ContentTypeMode, MediaType, UserQuery
 from app.schemas import ContentRecommendation
 from app.services.anthropic_service import get_anthropic_service
+from app.services.openlibrary_service import get_openlibrary_service
 from app.services.supabase_service import get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
 
@@ -54,6 +55,7 @@ def stream_lines(body: dict, fail_after: int | None = None, invalid_picks: int =
         get_anthropic_service: lambda: anthropic,
         get_supabase_service: FakeSupabase,
         get_tmdb_service: object,
+        get_openlibrary_service: object,
     }
     try:
         return asyncio.run(post_stream(body))
@@ -121,7 +123,7 @@ def test_media_types_win_over_legacy_field_and_are_deduped():
 @pytest.mark.parametrize("media_types, message", [
     ([], "must not be empty"),  # sent but empty: not silently treated as legacy "movie"
     ([MediaType.MOVIE, MediaType.BOOK], "same shelf"),
-    ([MediaType.BOOK], "not supported yet: book"),
+    ([MediaType.BOOK, MediaType.PAPER], "not supported yet: paper"),
 ])
 def test_invalid_media_types_are_rejected(media_types, message):
     with pytest.raises(ValidationError, match=message):

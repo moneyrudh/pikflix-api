@@ -37,8 +37,8 @@ SHELF_MEDIA: Dict[Shelf, frozenset[MediaType]] = {
     Shelf.READ: frozenset({MediaType.BOOK, MediaType.PAPER}),
 }
 
-# Media types the search pipeline can serve today. Books and papers join in later phases.
-SUPPORTED_MEDIA: frozenset[MediaType] = SHELF_MEDIA[Shelf.WATCH]
+# Media types the search pipeline can serve today. Papers join in a later phase.
+SUPPORTED_MEDIA: frozenset[MediaType] = SHELF_MEDIA[Shelf.WATCH] | {MediaType.BOOK}
 
 
 class Genre(BaseModel):
@@ -209,6 +209,88 @@ class Show(BaseModel):
         from_attributes = True
 
 
+class Author(BaseModel):
+    name: str
+    id: Optional[str] = None  # Open Library author key, e.g. "OL79034A"
+
+
+class Book(BaseModel):
+    """A book at the work level (all editions together), identified by its Open Library work key."""
+    id: str  # e.g. "OL893414W"
+    title: str
+    subtitle: Optional[str] = None
+    authors: List[Author] = []
+    first_publish_year: Optional[int] = None
+    description: Optional[str] = None  # loaded on demand by GET /api/books/{id}
+    description_checked_at: Optional[datetime] = None  # set once Open Library was asked, even if it had none
+    cover_id: Optional[int] = None  # https://covers.openlibrary.org/b/id/{cover_id}-L.jpg
+    isbns: List[str] = []  # ISBN-13 first; for Google Books lookups later
+    subjects: List[str] = []
+    page_count: Optional[int] = None  # median across editions
+    edition_count: Optional[int] = None
+    ia_ids: List[str] = []  # Internet Archive identifiers (borrow/read)
+    ebook_access: Optional[str] = None  # "public" | "borrowable" | "printdisabled" | "no_ebook"
+    last_updated: Optional[datetime] = None
+
+
+class OpenLibraryEdition(BaseModel):
+    title: Optional[str] = None
+
+
+class OpenLibraryEditions(BaseModel):
+    docs: List[OpenLibraryEdition] = []
+
+
+class OpenLibraryDoc(BaseModel):
+    """One work from Open Library's search.json (only the requested `fields`)."""
+    key: str  # "/works/OL893414W"
+    title: str
+    subtitle: Optional[str] = None
+    author_name: List[str] = []
+    author_key: List[str] = []
+    first_publish_year: Optional[int] = None
+    cover_i: Optional[int] = None
+    isbn: List[str] = []
+    ia: List[str] = []
+    ebook_access: Optional[str] = None
+    edition_count: Optional[int] = None
+    number_of_pages_median: Optional[int] = None
+    subject: List[str] = []
+    # The edition that best matched the search. Translated works are catalogued under their original
+    # title ("L'étranger"), so this is where "The Stranger" shows up.
+    editions: Optional[OpenLibraryEditions] = None
+
+    @property
+    def work_id(self) -> str:
+        return self.key.rsplit("/", 1)[-1]
+
+    @property
+    def titles(self) -> List[str]:
+        """The work's title plus the matched edition's, for comparing against a pick."""
+        edition_titles = [e.title for e in (self.editions.docs if self.editions else []) if e.title]
+        return [self.title, *edition_titles]
+
+    def to_book(self, title: Optional[str] = None) -> Book:
+        """`title` overrides the work's title, e.g. the English edition title of a translated work."""
+        # Popular works list hundreds of ISBNs and subjects; keep a useful handful
+        isbns = sorted(self.isbn, key=lambda i: len(i) != 13)[:10]
+        return Book(
+            id=self.work_id,
+            title=title or self.title,
+            subtitle=self.subtitle,
+            authors=[Author(name=name, id=key) for name, key in zip(self.author_name, self.author_key)]
+                    or [Author(name=name) for name in self.author_name],
+            first_publish_year=self.first_publish_year,
+            cover_id=self.cover_i,
+            isbns=isbns,
+            subjects=self.subject[:10],
+            page_count=self.number_of_pages_median,
+            edition_count=self.edition_count,
+            ia_ids=self.ia[:5],
+            ebook_access=self.ebook_access,
+        )
+
+
 class RecommendationSummary(BaseModel):
     title: str
     year: Optional[int] = None
@@ -246,6 +328,10 @@ class UserQuery(BaseModel):
         if unsupported:
             raise ValueError(f"not supported yet: {', '.join(sorted(m.value for m in unsupported))}")
         return self
+
+    @property
+    def shelf(self) -> Shelf:
+        return next(shelf for shelf, media in SHELF_MEDIA.items() if frozenset(self.media_types) <= media)
 
     @property
     def watch_mode(self) -> ContentTypeMode:
@@ -286,7 +372,7 @@ class InitEvent(BaseModel):
     type: Literal["init"] = "init"
     query: str
     media_types: List[MediaType]
-    content_type: ContentTypeMode  # legacy: what the current client reads
+    content_type: Optional[ContentTypeMode] = None  # legacy watch mode; None for read requests
 
 
 class ContentEvent(BaseModel):
@@ -302,7 +388,7 @@ class ItemEvent(BaseModel):
     type: Literal["item"] = "item"
     media_type: MediaType
     reason: Optional[str] = None
-    data: Union[Movie, Show]
+    data: Union[Movie, Show, Book]
 
 
 class DoneEvent(BaseModel):

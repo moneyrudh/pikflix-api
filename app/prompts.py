@@ -5,6 +5,7 @@ Prompts are composed from a shared base + content-type-specific injections.
 Each content type only adds what's unique to it.
 """
 
+from app.config import BOOK_PICKS_REQUESTED
 from app.models import ContentTypeMode
 
 _RECOMMENDATION_BASE = (
@@ -50,6 +51,27 @@ _CONTENT_TYPE_LABELS = {
 }
 
 
+_BOOK_PROMPT = (
+    "You are a book recommendation assistant. Given a user's requirements, "
+    f"provide exactly {BOOK_PICKS_REQUESTED} diverse book recommendations that match their criteria.\n\n"
+    "Make sure the results are diverse in terms of era, style, and popularity.\n"
+    "Only recommend books you are confident exist. Give each title as it was published (without series "
+    "numbering), the primary author's full name, and the year of first publication, or null if you are unsure. "
+    "These are used to look the book up, so accuracy matters more than variety.\n"
+    f"You MUST give exactly {BOOK_PICKS_REQUESTED} recommendations. No more. No less.\n"
+    "When the user provides follow-up requests, use the conversation history to understand context "
+    "and avoid recommending titles that were already suggested."
+)
+
+
+def get_book_system_prompt() -> str:
+    return _BOOK_PROMPT
+
+
+def get_book_user_message(query: str, history: list | None = None) -> str:
+    return _user_message("books", query, history)
+
+
 def get_recommendation_system_prompt(content_type: ContentTypeMode) -> str:
     """Compose system prompt from base + content-type-specific injection."""
     context = _CONTENT_TYPE_CONTEXTS[content_type]
@@ -58,8 +80,10 @@ def get_recommendation_system_prompt(content_type: ContentTypeMode) -> str:
 
 def get_recommendation_user_message(query: str, content_type: ContentTypeMode, history: list | None = None) -> str:
     """Build user message with optional conversation history."""
-    label = _CONTENT_TYPE_LABELS[content_type]
+    return _user_message(_CONTENT_TYPE_LABELS[content_type], query, history)
 
+
+def _user_message(label: str, query: str, history: list | None) -> str:
     if not history:
         return f"Find me {label} that match this description: {query}"
 
