@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import books, chats, recommendations, providers
+from app.api.endpoints import books, chat, chats, recommendations, providers
 from app.config import CORS_ORIGINS
 from app.services.anthropic_service import get_anthropic_service
 from app.services.chat_store import get_chat_store
@@ -80,6 +80,7 @@ app.include_router(recommendations.router, prefix="/api/recommendations", tags=[
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(books.router, prefix="/api/books", tags=["books"])
 app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 
 @app.get("/health")
 async def health_check():
