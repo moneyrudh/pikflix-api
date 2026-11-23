@@ -13,6 +13,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Optional. Open Library gives identified clients (app name + contact in the User-Agent) 3 req/s instead of 1.
 OPENLIBRARY_CONTACT = os.getenv("OPENLIBRARY_CONTACT")
+# Optional but needed in production: without it, Semantic Scholar's anonymous tier is shared by everyone and throttled
+SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
 
 # Validate required env vars
 _required = {
@@ -35,6 +37,12 @@ BOOK_CACHE_DURATION = 24 * 30  # book metadata is effectively static
 BOOK_PICKS_REQUESTED = 12
 BOOK_RESULTS_SHOWN = 9
 
+# Papers: Claude plans keyword queries, Semantic Scholar returns real candidates, Claude ranks them
+PAPER_QUERIES_MAX = 3
+PAPER_RESULTS_PER_QUERY = 20
+PAPER_CANDIDATES_MAX = 40
+PAPER_RESULTS_SHOWN = 9
+
 # Anthropic API settings
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
@@ -50,3 +58,6 @@ OPENLIBRARY_BASE_URL = "https://openlibrary.org"
 OPENLIBRARY_USER_AGENT = "PikFlix/1.0 (https://pikflix.app" + (f"; {OPENLIBRARY_CONTACT})" if OPENLIBRARY_CONTACT else ")")
 # Open Library's published limits; shared by every request this process makes
 OPENLIBRARY_REQUESTS_PER_SECOND = 3 if OPENLIBRARY_CONTACT else 1
+SEMANTIC_SCHOLAR_BASE_URL = "https://api.semanticscholar.org/graph/v1"
+# The introductory API-key limit; also polite on the shared anonymous tier
+SEMANTIC_SCHOLAR_REQUESTS_PER_SECOND = 1

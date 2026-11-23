@@ -127,7 +127,7 @@ def test_media_types_win_over_legacy_field_and_are_deduped():
 @pytest.mark.parametrize("media_types, message", [
     ([], "must not be empty"),  # sent but empty: not silently treated as legacy "movie"
     ([MediaType.MOVIE, MediaType.BOOK], "same shelf"),
-    ([MediaType.BOOK, MediaType.PAPER], "not supported yet: paper"),
+    ([MediaType.BOOK, MediaType.PAPER], "books and papers can.t be searched together"),  # failsafe: different pipelines
 ])
 def test_invalid_media_types_are_rejected(media_types, message):
     with pytest.raises(ValidationError, match=message):

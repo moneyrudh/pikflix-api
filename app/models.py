@@ -37,8 +37,8 @@ SHELF_MEDIA: Dict[Shelf, frozenset[MediaType]] = {
     Shelf.READ: frozenset({MediaType.BOOK, MediaType.PAPER}),
 }
 
-# Media types the search pipeline can serve today. Papers join in a later phase.
-SUPPORTED_MEDIA: frozenset[MediaType] = SHELF_MEDIA[Shelf.WATCH] | {MediaType.BOOK}
+# Media types the search pipeline can serve
+SUPPORTED_MEDIA: frozenset[MediaType] = SHELF_MEDIA[Shelf.WATCH] | SHELF_MEDIA[Shelf.READ]
 
 
 class Genre(BaseModel):
@@ -294,6 +294,69 @@ class OpenLibraryDoc(BaseModel):
         )
 
 
+class Paper(BaseModel):
+    """A research paper, identified by its Semantic Scholar paperId."""
+    id: str
+    title: str
+    authors: List[Author] = []
+    year: Optional[int] = None
+    publication_date: Optional[date] = None
+    venue: Optional[str] = None
+    abstract: Optional[str] = None
+    tldr: Optional[str] = None  # Semantic Scholar's machine-generated one-line summary
+    doi: Optional[str] = None
+    arxiv_id: Optional[str] = None
+    citation_count: Optional[int] = None
+    fields_of_study: List[str] = []
+    open_access_pdf: Optional[str] = None
+
+
+class S2Author(BaseModel):
+    authorId: Optional[str] = None
+    name: str
+
+
+class S2Paper(BaseModel):
+    """One result from Semantic Scholar's /paper/search (only the requested `fields`)."""
+    paperId: str
+    title: str
+    abstract: Optional[str] = None
+    year: Optional[int] = None
+    venue: Optional[str] = None
+    authors: List[S2Author] = []
+    citationCount: Optional[int] = None
+    publicationDate: Optional[date] = None
+    fieldsOfStudy: Optional[List[str]] = None
+    externalIds: Optional[Dict[str, Any]] = None
+    openAccessPdf: Optional[Dict[str, Any]] = None
+    tldr: Optional[Dict[str, Any]] = None
+
+    @property
+    def doi(self) -> Optional[str]:
+        return (self.externalIds or {}).get("DOI")
+
+    @property
+    def arxiv_id(self) -> Optional[str]:
+        return (self.externalIds or {}).get("ArXiv")
+
+    def to_paper(self) -> Paper:
+        return Paper(
+            id=self.paperId,
+            title=self.title,
+            authors=[Author(name=a.name, id=a.authorId) for a in self.authors],
+            year=self.year,
+            publication_date=self.publicationDate,
+            venue=self.venue or None,
+            abstract=self.abstract,
+            tldr=(self.tldr or {}).get("text"),
+            doi=self.doi,
+            arxiv_id=self.arxiv_id,
+            citation_count=self.citationCount,
+            fields_of_study=self.fieldsOfStudy or [],
+            open_access_pdf=(self.openAccessPdf or {}).get("url") or None,
+        )
+
+
 class RecommendationSummary(BaseModel):
     title: str
     year: Optional[int] = None
@@ -330,6 +393,9 @@ class UserQuery(BaseModel):
         unsupported = requested - SUPPORTED_MEDIA
         if unsupported:
             raise ValueError(f"not supported yet: {', '.join(sorted(m.value for m in unsupported))}")
+        if requested == SHELF_MEDIA[Shelf.READ]:
+            # Books and papers use different pipelines; mixing them waits for the Watch/Read tabs
+            raise ValueError("books and papers can't be searched together yet")
         return self
 
     @property
@@ -377,7 +443,7 @@ class ItemEvent(BaseModel):
     type: Literal["item"] = "item"
     media_type: MediaType
     reason: Optional[str] = None
-    data: Union[Movie, Show, Book]
+    data: Union[Movie, Show, Book, Paper]
 
 
 class DoneEvent(BaseModel):

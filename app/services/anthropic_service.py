@@ -1,6 +1,6 @@
 import logging
 from functools import cache
-from typing import AsyncGenerator, Type, TypeVar
+from typing import AsyncGenerator, List, Type, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -8,11 +8,13 @@ import anthropic
 import httpx
 from pydantic import BaseModel, TypeAdapter
 
-from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from app.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, PAPER_QUERIES_MAX
 from app.models import ContentTypeMode
-from app.schemas import BookPick, BookPicks, ContentRecommendation, ContentRecommendations
+from app.schemas import BookPick, BookPicks, ContentRecommendation, ContentRecommendations, PaperPick, PaperPicks, PaperQueries
 from app.prompts import (
     get_book_system_prompt, get_book_user_message,
+    get_paper_queries_system_prompt, get_paper_queries_user_message,
+    get_paper_rank_system_prompt, get_paper_rank_user_message,
     get_recommendation_system_prompt, get_recommendation_user_message,
 )
 from app.services.llm_stream import ArrayItemParser, ParseStats
@@ -34,7 +36,8 @@ class AnthropicService:
             http_client=httpx.AsyncClient(http2=True)
         )
         self.model = ANTHROPIC_MODEL
-        self._schemas = {wrapper: self.build_schema(wrapper) for wrapper in (ContentRecommendations, BookPicks)}
+        self._schemas = {wrapper: self.build_schema(wrapper)
+                         for wrapper in (ContentRecommendations, BookPicks, PaperQueries, PaperPicks)}
 
     @staticmethod
     def build_schema(wrapper: Type[BaseModel]) -> dict:
@@ -54,6 +57,26 @@ class AnthropicService:
         return self._stream_items(
             get_book_system_prompt(), get_book_user_message(query, history),
             BookPick, BookPicks, web_search, stats,
+        )
+
+    async def plan_paper_queries(self, query: str, history: list | None = None) -> List[str]:
+        """Step 1 of a paper search: keyword queries for Semantic Scholar (short, so not streamed)."""
+        response = await self.client.messages.create(
+            model=self.model,
+            system=get_paper_queries_system_prompt(),
+            messages=[{"role": "user", "content": get_paper_queries_user_message(query, history)}],
+            max_tokens=512,
+            output_config={"format": {"type": "json_schema", "schema": self._schemas[PaperQueries]}},
+        )
+        text = next((block.text for block in response.content if block.type == "text"), "")
+        queries = [q.strip() for q in PaperQueries.model_validate_json(text).queries if q.strip()]
+        return list(dict.fromkeys(queries))[:PAPER_QUERIES_MAX]
+
+    def get_paper_picks(self, query: str, candidates: str, history: list | None = None, stats: ParseStats | None = None) -> AsyncGenerator[PaperPick, None]:
+        """Step 3 of a paper search: stream the chosen candidates (paper_id, reason), best first."""
+        return self._stream_items(
+            get_paper_rank_system_prompt(), get_paper_rank_user_message(query, candidates, history),
+            PaperPick, PaperPicks, False, stats,
         )
 
     async def _stream_items(self, system_prompt: str, user_message: str, item: Type[T], wrapper: Type[BaseModel], web_search: bool, stats: ParseStats | None) -> AsyncGenerator[T, None]:
