@@ -196,17 +196,26 @@ class FakeAnthropic:
             yield PaperPick(paper_id=pid, reason=f"why {pid}")
 
 
+class FakePaperCache:
+    def __init__(self) -> None:
+        self.saved: List[str] = []
+
+    async def save_papers(self, papers) -> None:
+        self.saved += [p.id for p in papers]
+
+
 class FakeS2:
     async def search(self, query: str) -> List[S2Paper]:
         return CANDIDATES[:6] if query == "q1" else CANDIDATES[4:]
 
 
-def run_paper_search(picks: List[str]) -> tuple[List[dict], FakeAnthropic]:
+def run_paper_search(picks: List[str], cache: Optional[FakePaperCache] = None) -> tuple[List[dict], FakeAnthropic]:
     anthropic = FakeAnthropic(picks)
+    cache = cache or FakePaperCache()
     app.dependency_overrides = {
         get_anthropic_service: lambda: anthropic,
         get_semantic_scholar_service: FakeS2,
-        get_supabase_service: object, get_tmdb_service: object, get_openlibrary_service: object,
+        get_supabase_service: lambda: cache, get_tmdb_service: object, get_openlibrary_service: object,
     }
 
     async def post() -> List[dict]:
@@ -240,7 +249,7 @@ def test_semantic_scholar_outage_says_so_instead_of_blaming_claude():
     anthropic = FakeAnthropic(["p1"])
     app.dependency_overrides = {
         get_anthropic_service: lambda: anthropic, get_semantic_scholar_service: DownS2,
-        get_supabase_service: object, get_tmdb_service: object, get_openlibrary_service: object,
+        get_supabase_service: FakePaperCache, get_tmdb_service: object, get_openlibrary_service: object,
     }
 
     async def post() -> List[dict]:
@@ -254,6 +263,12 @@ def test_semantic_scholar_outage_says_so_instead_of_blaming_claude():
     finally:
         app.dependency_overrides = {}
     assert events[-1] == {"type": "error", "message": "Paper search is unavailable right now. Please try again in a minute."}
+
+
+def test_every_candidate_is_cached_for_the_agent():
+    cache = FakePaperCache()
+    run_paper_search(["p1"], cache)
+    assert sorted(cache.saved) == sorted(p.paperId for p in CANDIDATES)
 
 
 def test_paper_search_stops_at_the_display_limit():

@@ -184,6 +184,8 @@ async def get_recommendations_stream(
             candidates.update(await find_candidates(queries, semantic_scholar))
             if not candidates:
                 return
+            # Cached so the agent (and reopened chats) can show these papers by ref later
+            asyncio.create_task(supabase_service.save_papers([paper.to_paper() for paper in candidates.values()]))
             async for pick in anthropic_service.get_paper_picks(
                     query.query, format_candidates(candidates.values()), query.history, stats=parse_stats):
                 yield pick

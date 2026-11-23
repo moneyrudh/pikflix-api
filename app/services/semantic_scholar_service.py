@@ -67,6 +67,19 @@ class SemanticScholarService:
             await self.sleep(retry_delay(attempt, response.headers.get("Retry-After")))
         raise AssertionError("unreachable")
 
+    async def get_paper(self, paper_id: str) -> Optional[S2Paper]:
+        """One paper by its paperId, or None if Semantic Scholar doesn't know it. Raises SemanticScholarError."""
+        await self.limiter.wait()
+        try:
+            response = await self.client.get(f"{SEMANTIC_SCHOLAR_BASE_URL}/paper/{paper_id}", params={"fields": SEARCH_FIELDS})
+        except httpx.HTTPError as e:
+            raise SemanticScholarError(f"paper {paper_id}: {e.__class__.__name__}") from e
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise SemanticScholarError(f"paper {paper_id}: HTTP {response.status_code}")
+        return S2Paper.model_validate(response.json())
+
 
 def merge_candidates(result_lists: List[List[S2Paper]], cap: int = PAPER_CANDIDATES_MAX) -> List[S2Paper]:
     """Interleave each query's results (so every angle is represented), drop duplicates by DOI,

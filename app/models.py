@@ -27,6 +27,34 @@ class MediaType(str, Enum):
     PAPER = "paper"
 
 
+class RefType(str, Enum):
+    """What a ref points at: any media type, or a person (writers, directors, actors)."""
+    MOVIE = "movie"
+    SHOW = "show"
+    BOOK = "book"
+    PAPER = "paper"
+    PERSON = "person"
+
+
+class MediaRef(BaseModel):
+    """Stable identity of an item as `"<type>:<id>"` ("movie:603", "book:OL893414W", "person:5632").
+    The id is the source system's (TMDB, Open Library work key, Semantic Scholar paperId), as a string.
+    The agent only ever handles refs; the backend turns them into data."""
+    type: RefType
+    id: str
+
+    @classmethod
+    def parse(cls, value: str) -> "MediaRef":
+        """Raises ValueError for anything that isn't `<known type>:<non-empty id>`."""
+        kind, sep, ident = value.strip().partition(":")
+        if not sep or not ident:
+            raise ValueError(f"not a ref: {value!r}")
+        return cls(type=RefType(kind), id=ident)
+
+    def __str__(self) -> str:
+        return f"{self.type.value}:{self.id}"
+
+
 class Shelf(str, Enum):
     WATCH = "watch"
     READ = "read"
