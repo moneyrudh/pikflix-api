@@ -6,7 +6,7 @@ from typing import Any, Iterator
 import pytest
 
 from app.models import ContentType
-from app.schemas import BookPicks, ContentRecommendations
+from app.schemas import BookPicks, ContentRecommendations, PaperPicks, PaperQueries
 from app.services.anthropic_service import AnthropicService
 
 SNAPSHOTS = Path(__file__).parent / "snapshots"
@@ -24,7 +24,8 @@ def walk_keys(node: Any) -> Iterator[str]:
             yield from walk_keys(value)
 
 
-SCHEMAS = {"content_recommendations": ContentRecommendations, "book_picks": BookPicks}
+SCHEMAS = {"content_recommendations": ContentRecommendations, "book_picks": BookPicks,
+           "paper_picks": PaperPicks}
 
 
 @pytest.mark.parametrize("name", SCHEMAS)
@@ -55,3 +56,8 @@ def test_book_year_is_required_but_nullable():
     pick = AnthropicService.build_schema(BookPicks)["$defs"]["BookPick"]
     assert set(pick["required"]) == {"title", "author", "year", "reason"}
     assert {"type": "null"} in pick["properties"]["year"]["anyOf"]
+
+
+def test_paper_queries_schema():
+    schema = AnthropicService.build_schema(PaperQueries)
+    assert list(schema["properties"]) == ["queries"] and not FORBIDDEN_KEYS & set(walk_keys(schema))

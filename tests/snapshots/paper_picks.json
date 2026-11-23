@@ -1,0 +1,42 @@
+{
+  "$defs": {
+    "PaperPick": {
+      "additionalProperties": false,
+      "properties": {
+        "paper_id": {
+          "description": "The paper's id, copied exactly from the candidate list",
+          "title": "Paper Id",
+          "type": "string"
+        },
+        "reason": {
+          "description": "A brief one-sentence explanation of why this matches the query",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "paper_id",
+        "reason"
+      ],
+      "title": "PaperPick",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Step 3 of a paper search: the best candidates, ranked.",
+  "properties": {
+    "items": {
+      "description": "The best matching candidates, most relevant first, at most 9",
+      "items": {
+        "$ref": "#/$defs/PaperPick"
+      },
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "PaperPicks",
+  "type": "object"
+}

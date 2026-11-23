@@ -8,8 +8,9 @@ import pytest
 from app.models import OpenLibraryDoc, OpenLibraryEdition, OpenLibraryEditions
 from app.schemas import BookPick
 from app.services.openlibrary_service import (
-    OpenLibraryError, OpenLibraryService, RateLimiter, best_match, display_title, lookup_key, normalize_title, parse_description,
+    OpenLibraryError, OpenLibraryService, best_match, display_title, lookup_key, normalize_title, parse_description,
 )
+from app.services.rate_limit import RateLimiter
 
 
 def pick(title: str, author: str, year: Optional[int] = None) -> BookPick:

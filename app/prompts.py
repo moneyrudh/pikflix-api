@@ -5,7 +5,7 @@ Prompts are composed from a shared base + content-type-specific injections.
 Each content type only adds what's unique to it.
 """
 
-from app.config import BOOK_PICKS_REQUESTED
+from app.config import BOOK_PICKS_REQUESTED, PAPER_QUERIES_MAX, PAPER_RESULTS_SHOWN
 from app.models import ContentTypeMode
 
 _RECOMMENDATION_BASE = (
@@ -62,6 +62,43 @@ _BOOK_PROMPT = (
     "When the user provides follow-up requests, use the conversation history to understand context "
     "and avoid recommending titles that were already suggested."
 )
+
+
+_PAPER_QUERIES_PROMPT = (
+    "You turn a request for research papers into keyword search queries for Semantic Scholar, "
+    "a search engine over titles and abstracts. "
+    f"Write 1 to {PAPER_QUERIES_MAX} short queries (2-6 words each) that together cover the request: "
+    "the core topic first, then distinct angles on it. "
+    "Use the specific concepts, methods and terms researchers in that field use (for 'how do we form "
+    "memories': 'hippocampus memory consolidation', 'long-term potentiation', 'synaptic plasticity memory'), "
+    "not generic words like 'success', 'effectiveness' or 'advantages', which match unrelated applied papers. "
+    "For follow-up requests, use the conversation history to understand what is being refined."
+)
+
+_PAPER_RANK_PROMPT = (
+    "You are a research paper recommendation assistant. You will be given a request and a list of "
+    "candidate papers found by search, one per line as: id | title | year | venue | citations | abstract excerpt.\n\n"
+    f"Choose up to {PAPER_RESULTS_SHOWN} candidates that best match the request, most relevant first. "
+    "Prefer a mix of foundational and recent work when the request is broad. "
+    "Only choose from the candidate list, and copy each id exactly as given. "
+    "If fewer candidates are relevant, return fewer rather than padding with weak matches."
+)
+
+
+def get_paper_queries_system_prompt() -> str:
+    return _PAPER_QUERIES_PROMPT
+
+
+def get_paper_queries_user_message(query: str, history: list | None = None) -> str:
+    return _user_message("research papers", query, history)
+
+
+def get_paper_rank_system_prompt() -> str:
+    return _PAPER_RANK_PROMPT
+
+
+def get_paper_rank_user_message(query: str, candidates: str, history: list | None = None) -> str:
+    return f"{_user_message('research papers', query, history)}\n\nCandidates:\n{candidates}"
 
 
 def get_book_system_prompt() -> str:

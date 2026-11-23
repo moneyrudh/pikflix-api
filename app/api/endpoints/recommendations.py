@@ -4,15 +4,18 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.config import BOOK_RESULTS_SHOWN
+from app.config import BOOK_RESULTS_SHOWN, PAPER_RESULTS_SHOWN
 from app.models import (
-    UserQuery, Book, Movie, Show, ContentType, ContentTypeMode, MediaType, Shelf,
+    UserQuery, Book, Movie, Paper, S2Paper, Show, ContentType, ContentTypeMode, MediaType, Shelf,
     InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent,
 )
-from app.schemas import BookPick, ContentRecommendation
+from app.schemas import BookPick, ContentRecommendation, PaperPick
 from app.services.anthropic_service import AnthropicService, get_anthropic_service
 from app.services.llm_stream import ParseStats
 from app.services.openlibrary_service import OpenLibraryService, get_openlibrary_service, display_title, lookup_key
+from app.services.semantic_scholar_service import (
+    SemanticScholarError, SemanticScholarService, find_candidates, format_candidates, get_semantic_scholar_service,
+)
 from app.services.supabase_service import SupabaseService, get_supabase_service
 from app.services.tmdb_service import TMDBService, get_tmdb_service
 import asyncio
@@ -20,6 +23,7 @@ import asyncio
 router = APIRouter()
 
 LLM_ERROR_MESSAGE = "Couldn't get recommendations right now. Please try again."
+PAPER_SEARCH_ERROR_MESSAGE = "Paper search is unavailable right now. Please try again in a minute."
 
 
 class _EnoughResults(Exception):
@@ -114,11 +118,14 @@ async def get_recommendations_stream(
     supabase_service: SupabaseService = Depends(get_supabase_service),
     tmdb_service: TMDBService = Depends(get_tmdb_service),
     openlibrary: OpenLibraryService = Depends(get_openlibrary_service),
+    semantic_scholar: SemanticScholarService = Depends(get_semantic_scholar_service),
 ):
     reading = query.shelf == Shelf.READ
+    papers = query.media_types == [MediaType.PAPER]
     request_mode = None if reading else query.watch_mode
-    # Books ask Claude for extra picks and stop once enough are verified; watch shows every pick
-    limit = BOOK_RESULTS_SHOWN if reading else None
+    # Books ask Claude for extra picks and stop once enough are verified; papers stop at the same
+    # count as a guard (Claude is asked for at most that many); watch shows every pick
+    limit = (PAPER_RESULTS_SHOWN if papers else BOOK_RESULTS_SHOWN) if reading else None
 
     async def generate() -> AsyncGenerator[str, None]:
         yield _line(InitEvent(query=query.query, media_types=query.media_types, content_type=request_mode))
@@ -128,13 +135,25 @@ async def get_recommendations_stream(
         lines: asyncio.Queue[Optional[str]] = asyncio.Queue()
         sent = dropped = 0
         parse_stats = ParseStats()  # picks Claude emitted that failed validation also count as dropped
+        candidates: Dict[str, S2Paper] = {}  # papers: the real search results Claude ranks
+        sent_papers: set[str] = set()
 
-        async def resolve(pick: Union[ContentRecommendation, BookPick]) -> None:
+        async def resolve(pick: Union[ContentRecommendation, BookPick, PaperPick]) -> None:
             nonlocal sent, dropped
-            item: Union[Movie, Show, Book, None] = None
+            item: Union[Movie, Show, Book, Paper, None] = None
             legacy_type: Optional[ContentType] = None  # watch results also go out as the legacy `content` event
+            label = pick.paper_id if isinstance(pick, PaperPick) else pick.title
             try:
-                if isinstance(pick, BookPick):
+                if isinstance(pick, PaperPick):
+                    # Only papers from the search results can be shown; an unknown id is never trusted
+                    candidate = candidates.get(pick.paper_id)
+                    if candidate is None:
+                        logger.warning("Claude picked a paper id that wasn't a candidate: %s", pick.paper_id)
+                    elif pick.paper_id not in sent_papers:
+                        sent_papers.add(pick.paper_id)
+                        item = candidate.to_paper()
+                    media_type = MediaType.PAPER
+                elif isinstance(pick, BookPick):
                     item = await _resolve_book(pick, openlibrary, supabase_service)
                     media_type = MediaType.BOOK
                 else:
@@ -144,7 +163,7 @@ async def get_recommendations_stream(
                         legacy_type, item = resolved
                         media_type = MediaType(legacy_type.value)
             except Exception:
-                logger.exception("Error resolving '%s'", pick.title)
+                logger.exception("Error resolving '%s'", label)
             if item is None:
                 dropped += 1
                 return
@@ -153,13 +172,26 @@ async def get_recommendations_stream(
             sent += 1
             reason = pick.reason or None
             await lines.put(_line(ItemEvent(media_type=media_type, reason=reason, data=item)))
-            if legacy_type is not None and not isinstance(item, Book):
+            if legacy_type is not None and isinstance(item, (Movie, Show)):
                 await lines.put(_line(ContentEvent(content_type=legacy_type, reason=reason, data=item)))
             if limit is not None and sent >= limit:
                 raise _EnoughResults
 
-        picks: AsyncGenerator[Union[ContentRecommendation, BookPick], None]
-        if reading:
+        async def paper_picks() -> AsyncGenerator[PaperPick, None]:
+            # Search first, then let Claude choose: Claude can't be trusted to name real papers
+            queries = await anthropic_service.plan_paper_queries(query.query, query.history) or [query.query]
+            logger.info("Paper search queries: %s", queries)
+            candidates.update(await find_candidates(queries, semantic_scholar))
+            if not candidates:
+                return
+            async for pick in anthropic_service.get_paper_picks(
+                    query.query, format_candidates(candidates.values()), query.history, stats=parse_stats):
+                yield pick
+
+        picks: AsyncGenerator[Union[ContentRecommendation, BookPick, PaperPick], None]
+        if papers:
+            picks = paper_picks()
+        elif reading:
             picks = anthropic_service.get_book_picks(query.query, query.history, query.web_search, stats=parse_stats)
         else:
             assert request_mode is not None
@@ -179,8 +211,12 @@ async def get_recommendations_stream(
                 except* _EnoughResults:
                     pass  # enough results: Claude's stream and the remaining lookups were cancelled
                 if llm_error:
-                    logger.error("Error streaming recommendations from Claude", exc_info=llm_error)
-                    await lines.put(_line(ErrorEvent(message=LLM_ERROR_MESSAGE)))
+                    if isinstance(llm_error, SemanticScholarError):
+                        logger.error("Paper search failed: %s", llm_error)
+                        await lines.put(_line(ErrorEvent(message=PAPER_SEARCH_ERROR_MESSAGE)))
+                    else:
+                        logger.error("Error streaming recommendations from Claude", exc_info=llm_error)
+                        await lines.put(_line(ErrorEvent(message=LLM_ERROR_MESSAGE)))
                 else:
                     await lines.put(_line(DoneEvent(count=sent, dropped=dropped + parse_stats.skipped)))
             except Exception:
