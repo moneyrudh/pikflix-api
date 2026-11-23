@@ -1,10 +1,12 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import books, recommendations, providers
+from app.api.endpoints import books, chats, recommendations, providers
 from app.config import CORS_ORIGINS
 from app.services.anthropic_service import get_anthropic_service
+from app.services.chat_store import get_chat_store
 from app.services.openlibrary_service import get_openlibrary_service
 from app.services.semantic_scholar_service import get_semantic_scholar_service
 from app.services.supabase_service import get_supabase_service
@@ -30,9 +32,27 @@ handler = logging.StreamHandler()
 handler.setFormatter(ColorFormatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 
+RETENTION_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _expire_anonymous_chats_daily() -> None:
+    """Delete anonymous users' inactive chats once a day (first run shortly after startup)."""
+    logger = logging.getLogger("app.retention")
+    await asyncio.sleep(60)
+    while True:
+        try:
+            deleted = await get_chat_store().delete_expired_anonymous()
+            logger.info("Deleted %d expired anonymous chats", deleted)
+        except Exception:
+            logger.exception("Expiring anonymous chats failed")
+        await asyncio.sleep(RETENTION_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    retention = asyncio.create_task(_expire_anonymous_chats_daily())
     yield
+    retention.cancel()
     # Services are shared for the app's lifetime; close their connection pools on shutdown.
     for service in (get_anthropic_service(), get_tmdb_service(), get_supabase_service(), get_openlibrary_service(),
                     get_semantic_scholar_service()):
@@ -59,6 +79,7 @@ app.add_middleware(
 app.include_router(recommendations.router, prefix="/api/recommendations", tags=["recommendations"])
 app.include_router(providers.router, prefix="/api/providers", tags=["providers"])
 app.include_router(books.router, prefix="/api/books", tags=["books"])
+app.include_router(chats.router, prefix="/api/chats", tags=["chats"])
 
 @app.get("/health")
 async def health_check():

@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import sys
 from dotenv import load_dotenv
@@ -28,10 +30,32 @@ if _missing:
     print(f"Missing required environment variables: {', '.join(_missing)}", file=sys.stderr)
     sys.exit(1)
 
+
+def _supabase_key_role(key: str) -> str:
+    """'service_role', 'anon', a new-style key's kind ('secret' / 'publishable'), or 'unknown'."""
+    if key.startswith("sb_"):
+        return key.split("_")[1]
+    try:
+        payload = key.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))).get("role", "unknown")
+    except (IndexError, ValueError):
+        return "unknown"
+
+
+# Every pikflix table has RLS with no policies, so only the service-role (secret) key can use them.
+# The anon key is meant for browsers; on the backend it would make every query come back empty or fail.
+if _supabase_key_role(SUPABASE_KEY or "") in ("anon", "publishable"):
+    print("SUPABASE_KEY is the public anon key; the backend needs the service_role (secret) key", file=sys.stderr)
+    sys.exit(1)
+
 # Cache settings (in hours)
 CACHE_DURATION = 24 * 7  # 1 week default cache
 PROVIDER_CACHE_DURATION = 24  # streaming availability changes often
 BOOK_CACHE_DURATION = 24 * 30  # book metadata is effectively static
+
+# Agent chats: anonymous users' chats expire after this many days without activity; signed-up users' never do
+ANONYMOUS_CHAT_RETENTION_DAYS = 30
+CHAT_TITLE_MAX_CHARS = 80
 
 # Books: ask Claude for extra picks so ones that fail verification don't leave the user short
 BOOK_PICKS_REQUESTED = 12
