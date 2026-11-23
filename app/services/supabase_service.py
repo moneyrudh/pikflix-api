@@ -7,8 +7,19 @@ from datetime import datetime, timedelta, timezone, date
 logger = logging.getLogger(__name__)
 from supabase import AsyncClient, AsyncClientOptions, acreate_client
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION, PROVIDER_CACHE_DURATION, BOOK_CACHE_DURATION
-from app.models import Book, ContentType, FetchRequest, CacheResult
-from app.schemas import ContentRecommendation
+from app.models import Book, ContentType
+
+def _fresh_after(hours: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(hours=hours)
+
+
+def _is_fresh(row: Dict[str, Any], hours: int) -> bool:
+    """The one staleness check every cached table uses: `last_updated` within the last `hours`."""
+    last_updated = row.get("last_updated")
+    if not last_updated:
+        return False
+    return datetime.fromisoformat(last_updated) >= _fresh_after(hours)
+
 
 class SupabaseService:
     def __init__(self):
@@ -34,52 +45,28 @@ class SupabaseService:
     def _table_for(content_type: ContentType) -> str:
         return "shows" if content_type == ContentType.SHOW else "movies"
 
-    async def get_content_by_titles(self, recommendations: List[ContentRecommendation], content_type: ContentType) -> CacheResult:
-        """
-        Check if content exists in the database and determine which need to be fetched/refreshed.
-        Branches column names based on content_type (title/release_date vs name/first_air_date).
-        """
+    async def get_content_by_title(self, title: str, year: Optional[int], content_type: ContentType) -> Optional[Dict[str, Any]]:
+        """The cached row for an exact title (and release year, when given), fresh or not.
+        Branches column names on content_type (title/release_date vs name/first_air_date)."""
         db = await self._db()
-        table = self._table_for(content_type)
         title_col = "name" if content_type == ContentType.SHOW else "title"
         date_col = "first_air_date" if content_type == ContentType.SHOW else "release_date"
+        query = db.table(self._table_for(content_type)).select("*").eq(title_col, title)
+        if year:
+            query = query.filter(date_col, "gte", f"{year}-01-01").filter(date_col, "lte", f"{year}-12-31")
+        result = await query.limit(1).execute()
+        return result.data[0] if result.data else None
 
-        found = []
-        to_fetch = []
-        cache_expiry = datetime.now(timezone.utc) - timedelta(hours=CACHE_DURATION)
+    async def get_content_by_id(self, content_id: int, content_type: ContentType) -> Optional[Dict[str, Any]]:
+        """The cached row for a TMDB id, fresh or not."""
+        db = await self._db()
+        result = await db.table(self._table_for(content_type)).select("*").eq("id", content_id).limit(1).execute()
+        return result.data[0] if result.data else None
 
-        for rec in recommendations:
-            query = db.table(table).select("*").eq(title_col, rec.title)
-
-            if rec.year:
-                query = query.filter(date_col, "gte", f"{rec.year}-01-01")
-                query = query.filter(date_col, "lte", f"{rec.year}-12-31")
-
-            result = await query.execute()
-
-            if result.data and len(result.data) > 0:
-                item = result.data[0]
-                last_updated = datetime.fromisoformat(item['last_updated'])
-
-                # Rows cached before trailers existed are refetched once to backfill them
-                if last_updated < cache_expiry or item.get('videos_checked_at') is None:
-                    to_fetch.append(FetchRequest(
-                        title=rec.title,
-                        year=rec.year,
-                        reason=rec.reason,
-                        id=item['id']
-                    ))
-                else:
-                    item['reason'] = rec.reason or ''
-                    found.append(item)
-            else:
-                to_fetch.append(FetchRequest(
-                    title=rec.title,
-                    year=rec.year,
-                    reason=rec.reason
-                ))
-
-        return CacheResult(found=found, to_fetch=to_fetch)
+    @staticmethod
+    def is_fresh_content(row: Dict[str, Any]) -> bool:
+        """Usable as is. Rows cached before trailers existed count as stale once, to backfill them."""
+        return _is_fresh(row, CACHE_DURATION) and row.get("videos_checked_at") is not None
 
     async def save_content(self, items: List[Dict[str, Any]], content_type: ContentType) -> None:
         db = await self._db()
@@ -121,9 +108,7 @@ class SupabaseService:
         provider_data = result.data[0]
 
         # Streaming catalogs change often; treat stale rows as a miss so callers refetch from TMDB.
-        last_updated = provider_data.get("last_updated")
-        cache_expiry = datetime.now(timezone.utc) - timedelta(hours=PROVIDER_CACHE_DURATION)
-        if not last_updated or datetime.fromisoformat(last_updated) < cache_expiry:
+        if not _is_fresh(provider_data, PROVIDER_CACHE_DURATION):
             return None
 
         results = provider_data.get("results") or {}
@@ -166,9 +151,8 @@ class SupabaseService:
     async def get_book_by_lookup_key(self, key: str) -> Optional[Book]:
         """A cached book matching a pick's lookup key (see openlibrary_service.lookup_key), if still fresh."""
         db = await self._db()
-        fresh_after = datetime.now(timezone.utc) - timedelta(hours=BOOK_CACHE_DURATION)
         result = await (db.table("books").select("*").eq("lookup_key", key)
-                        .gte("last_updated", fresh_after.isoformat())
+                        .gte("last_updated", _fresh_after(BOOK_CACHE_DURATION).isoformat())
                         .order("edition_count", desc=True).limit(1).execute())
         return Book.model_validate(result.data[0]) if result.data else None
 

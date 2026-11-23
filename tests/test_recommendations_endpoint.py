@@ -7,11 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.main import app
-from app.models import CacheResult, ContentType, ContentTypeMode, MediaType, UserQuery
+from datetime import datetime, timezone
+
+from app.models import ContentType, ContentTypeMode, MediaType, UserQuery
 from app.schemas import ContentRecommendation
 from app.services.anthropic_service import get_anthropic_service
 from app.services.openlibrary_service import get_openlibrary_service
-from app.services.supabase_service import get_supabase_service
+from app.services.supabase_service import SupabaseService, get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
 
 # Per-title cache lookup delay (seconds). "Slow" is emitted first but finishes last.
@@ -32,12 +34,14 @@ class FakeAnthropic:
 
 
 class FakeSupabase:
-    async def get_content_by_titles(self, recs: List[ContentRecommendation], content_type: ContentType) -> CacheResult:
-        title = recs[0].title
+    is_fresh_content = staticmethod(SupabaseService.is_fresh_content)
+
+    async def get_content_by_title(self, title: str, year, content_type: ContentType) -> dict:
         await asyncio.sleep(DELAYS[title])
         if title == "Broken":
             raise RuntimeError("db down")
-        return CacheResult(found=[{"id": len(title), "title": title}])
+        now = datetime.now(timezone.utc).isoformat()
+        return {"id": len(title), "title": title, "last_updated": now, "videos_checked_at": now}
 
 
 async def post_stream(body: dict) -> List[dict]:

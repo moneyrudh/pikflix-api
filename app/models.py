@@ -344,20 +344,6 @@ class UserQuery(BaseModel):
         return ContentTypeMode(self.media_types[0].value)
 
 
-class FetchRequest(BaseModel):
-    """Item that needs to be fetched from TMDB — either fresh or cache-expired."""
-    title: str
-    year: Optional[int] = None
-    reason: Optional[str] = None
-    id: Optional[int] = None  # Present when cache had an expired entry
-
-
-class CacheResult(BaseModel):
-    """Return type from Supabase cache lookup."""
-    found: List[Dict[str, Any]] = []
-    to_fetch: List[FetchRequest] = []
-
-
 class ProviderRequest(BaseModel):
     content_id: int
     content_type: ContentType = ContentType.MOVIE

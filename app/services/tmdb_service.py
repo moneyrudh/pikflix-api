@@ -6,10 +6,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 from app.config import TMDB_READ_ACCESS_TOKEN, TMDB_BASE_URL
-from app.models import ContentType, FetchRequest, TMDBVideo, Trailer
+from app.models import ContentType, TMDBVideo, Trailer
 
 SearchFn = Callable[[str, Optional[int]], Awaitable[List[Dict[str, Any]]]]
-DetailFn = Callable[[int], Awaitable[Dict[str, Any]]]
 
 
 def pick_trailer(videos: List[TMDBVideo], language: str = "en") -> Optional[Trailer]:
@@ -86,35 +85,6 @@ class TMDBService:
         data["videos_checked_at"] = datetime.now(timezone.utc).isoformat()
         return data
 
-    async def fetch_movie_data(self, movie_list: List[FetchRequest]) -> List[Dict[str, Any]]:
-        """
-        Fetch detailed movie data for each movie in the list
-
-        If a movie has an ID, fetch directly. Otherwise, search by title/year.
-        """
-        results = []
-
-        for movie in movie_list:
-            logger.info("Fetching movie from TMDB: %s", movie.title)
-            movie_data = None
-            reason = movie.reason or ''
-
-            if movie.id:
-                # Direct fetch by ID
-                movie_data = await self.get_movie_details(movie.id)
-            else:
-                # Search by title and year
-                search_results = await self.search_movies(movie.title, movie.year)
-                if search_results:
-                    movie_id = search_results[0]['id']
-                    movie_data = await self.get_movie_details(movie_id)
-
-            if movie_data:
-                movie_data['reason'] = reason
-                results.append(movie_data)
-
-        return results
-    
     async def get_movie_providers(self, movie_id: int) -> Dict[str, Any]:
         """
         Get movie watch providers (streaming services) from TMDB API
@@ -145,26 +115,6 @@ class TMDBService:
     async def get_show_details(self, show_id: int) -> Dict[str, Any]:
         return await self._get_details(f"{self.base_url}/tv/{show_id}")
 
-    async def fetch_show_data(self, show_list: List[FetchRequest]) -> List[Dict[str, Any]]:
-        results = []
-        for show in show_list:
-            logger.info("Fetching show from TMDB: %s", show.title)
-            show_data = None
-            reason = show.reason or ''
-
-            if show.id:
-                show_data = await self.get_show_details(show.id)
-            else:
-                search_results = await self.search_shows(show.title, show.year)
-                if search_results:
-                    show_id = search_results[0]['id']
-                    show_data = await self.get_show_details(show_id)
-
-            if show_data:
-                show_data['reason'] = reason
-                results.append(show_data)
-        return results
-
     async def get_show_providers(self, show_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/tv/{show_id}/watch/providers"
         response = await self.client.get(url)
@@ -172,40 +122,33 @@ class TMDBService:
             return response.json()
         return {"id": show_id, "results": {}}
 
-    async def fetch_content_data(self, content_list: List[FetchRequest], content_type: ContentType) -> List[Dict[str, Any]]:
-        if content_type == ContentType.SHOW:
-            return await self.fetch_show_data(content_list)
-        return await self.fetch_movie_data(content_list)
-
     async def get_content_providers(self, content_id: int, content_type: ContentType) -> Dict[str, Any]:
         if content_type == ContentType.SHOW:
             return await self.get_show_providers(content_id)
         return await self.get_movie_providers(content_id)
 
-    async def search_content(self, title: str, year: Optional[int], content_type: ContentType) -> tuple[Optional[Dict[str, Any]], ContentType]:
+    async def find_id(self, title: str, year: Optional[int], content_type: ContentType) -> Optional[Tuple[int, ContentType]]:
         """
-        Search TMDB for content. Tries the given content_type first.
-        If no result, falls back to the other type.
-        Returns (detail_data, resolved_content_type) or (None, original_type).
+        TMDB id of the top search result, trying the given content_type first and the other type
+        if that finds nothing. Returns (id, resolved_type), or None if neither search matches.
         """
-        lookups: Dict[ContentType, Tuple[SearchFn, DetailFn]] = {
-            ContentType.MOVIE: (self.search_movies, self.get_movie_details),
-            ContentType.SHOW: (self.search_shows, self.get_show_details),
+        searches: Dict[ContentType, SearchFn] = {
+            ContentType.MOVIE: self.search_movies,
+            ContentType.SHOW: self.search_shows,
         }
         fallback_type = ContentType.SHOW if content_type == ContentType.MOVIE else ContentType.MOVIE
-
-        # Try the classified type first, then fall back to the other type
         for attempt_type in (content_type, fallback_type):
             if attempt_type == fallback_type:
                 logger.info("Fallback search for '%s' as %s", title, fallback_type.value)
-            search, detail = lookups[attempt_type]
-            results = await search(title, year)
+            results = await searches[attempt_type](title, year)
             if results:
-                data = await detail(results[0]['id'])
-                if data:
-                    return data, attempt_type
+                return results[0]["id"], attempt_type
+        return None
 
-        return None, content_type
+    async def get_details(self, content_id: int, content_type: ContentType) -> Dict[str, Any]:
+        if content_type == ContentType.SHOW:
+            return await self.get_show_details(content_id)
+        return await self.get_movie_details(content_id)
 
 
 @cache
