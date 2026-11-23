@@ -45,9 +45,18 @@ class TMDBService:
     async def close(self) -> None:
         await self.client.aclose()
     
-    async def search_movies(self, query: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def _get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """GET a TMDB endpoint; None on any error status."""
+        response = await self.client.get(f"{self.base_url}{path}", params=params)
+        if response.status_code != 200:
+            logger.warning("TMDB %s returned %s", path, response.status_code)
+            return None
+        data: Dict[str, Any] = response.json()
+        return data
+
+    async def search_movies(self, query: str, year: Optional[int] = None, limit: int = 1) -> List[Dict[str, Any]]:
         """
-        Search for movies by title and optionally year
+        Search for movies by title and optionally year. Top `limit` matches.
         """
         url = f"{self.base_url}/search/movie"
         params: Dict[str, Any] = {"query": query}
@@ -58,9 +67,9 @@ class TMDBService:
         response = await self.client.get(url, params=params)
         
         if response.status_code == 200:
-            results = response.json().get("results", [])
-            return results[:1] if results else []  # Return only the top match
-        
+            results: List[Dict[str, Any]] = response.json().get("results", [])
+            return results[:limit]
+
         return []
 
     async def get_movie_details(self, movie_id: int) -> Dict[str, Any]:
@@ -100,7 +109,7 @@ class TMDBService:
         # Return empty structure if API call fails
         return {"id": movie_id, "results": {}}
 
-    async def search_shows(self, query: str, year: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def search_shows(self, query: str, year: Optional[int] = None, limit: int = 1) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/search/tv"
         params: Dict[str, Any] = {"query": query}
         if year:
@@ -108,8 +117,8 @@ class TMDBService:
 
         response = await self.client.get(url, params=params)
         if response.status_code == 200:
-            results = response.json().get("results", [])
-            return results[:1] if results else []
+            results: List[Dict[str, Any]] = response.json().get("results", [])
+            return results[:limit]
         return []
 
     async def get_show_details(self, show_id: int) -> Dict[str, Any]:
@@ -149,6 +158,30 @@ class TMDBService:
         if content_type == ContentType.SHOW:
             return await self.get_show_details(content_id)
         return await self.get_movie_details(content_id)
+
+    @staticmethod
+    def _path(content_type: ContentType) -> str:
+        return "tv" if content_type == ContentType.SHOW else "movie"
+
+    async def get_credits_and_keywords(self, content_id: int, content_type: ContentType) -> Optional[Dict[str, Any]]:
+        """Details plus credits (directors, writers, cast) and keywords ("based on novel or book")."""
+        return await self._get_json(f"/{self._path(content_type)}/{content_id}",
+                                    {"append_to_response": "credits,keywords"})
+
+    async def get_recommendations(self, content_id: int, content_type: ContentType, limit: int = 8) -> List[Dict[str, Any]]:
+        data = await self._get_json(f"/{self._path(content_type)}/{content_id}/recommendations")
+        results: List[Dict[str, Any]] = (data or {}).get("results", [])
+        return results[:limit]
+
+    async def search_person(self, name: str) -> Optional[Dict[str, Any]]:
+        """The top match for a person's name (TMDB orders by relevance and popularity)."""
+        data = await self._get_json("/search/person", {"query": name})
+        results = (data or {}).get("results", [])
+        return results[0] if results else None
+
+    async def get_person(self, person_id: int) -> Optional[Dict[str, Any]]:
+        """A person's bio plus every film and show they acted in or worked on (combined_credits)."""
+        return await self._get_json(f"/person/{person_id}", {"append_to_response": "combined_credits"})
 
 
 @cache

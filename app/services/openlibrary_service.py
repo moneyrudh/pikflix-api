@@ -178,6 +178,16 @@ class OpenLibraryService:
             return []
         return [OpenLibraryDoc.model_validate(doc) for doc in data.get("docs", [])]
 
+    async def search_any(self, query: str, limit: int = 8) -> List[OpenLibraryDoc]:
+        """Works matching free text (title, author or topic), in Open Library's relevance order.
+        (Not sorted by editions: that puts famous classics above the actual match.) [] if unreachable."""
+        try:
+            data = await self._get("/search.json", {"q": query, "fields": SEARCH_FIELDS, "limit": limit})
+        except OpenLibraryError as e:
+            logger.warning("Open Library search failed for '%s': %s", query, e)
+            return []
+        return [OpenLibraryDoc.model_validate(doc) for doc in data.get("docs", [])]
+
     async def find_book(self, pick: BookPick) -> Optional[OpenLibraryDoc]:
         """Search for Claude's pick and return the verified work, or None (logged) if nothing matches."""
         docs = await self.search(pick.title, pick.author)

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone, date
 logger = logging.getLogger(__name__)
 from supabase import AsyncClient, AsyncClientOptions, acreate_client
 from app.config import SUPABASE_URL, SUPABASE_KEY, CACHE_DURATION, PROVIDER_CACHE_DURATION, BOOK_CACHE_DURATION
-from app.models import Book, ContentType
+from app.models import Book, ContentType, Paper
 
 def _fresh_after(hours: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -173,6 +173,23 @@ class SupabaseService:
             logger.info("Saved book: %s", book.title)
         except Exception as e:
             logger.error("Error saving book %s: %s (%s)", book.title, e, e.__class__.__name__)
+
+    async def get_paper(self, paper_id: str) -> Optional[Paper]:
+        db = await self.db()
+        result = await db.table("papers").select("*").eq("id", paper_id).limit(1).execute()
+        return Paper.model_validate(result.data[0]) if result.data else None
+
+    async def save_papers(self, papers: List[Paper]) -> None:
+        """Upsert papers (e.g. a search's candidates) in one request."""
+        if not papers:
+            return
+        try:
+            db = await self.db()
+            now = datetime.now(timezone.utc).isoformat()
+            rows = list({p.id: {**p.model_dump(mode="json"), "last_updated": now} for p in papers}.values())
+            await db.table("papers").upsert(rows).execute()
+        except Exception as e:
+            logger.error("Error saving %d papers: %s (%s)", len(papers), e, e.__class__.__name__)
 
     async def save_book_description(self, book_id: str, description: Optional[str]) -> None:
         try:
