@@ -31,6 +31,12 @@ def doc(title: str, authors: List[str], year: Optional[int] = None, editions: in
     ("Cien años de soledad", "cien anos de soledad"),
     ("Pride & Prejudice", "pride and prejudice"),
     ("Neuromancer (Sprawl, #1)", "neuromancer"),
+    ("1984", "nineteen eighty four"),
+    ("Nineteen Eighty-Four", "nineteen eighty four"),
+    ("Catch-22", "catch twenty two"),
+    ("Fahrenheit 451", "fahrenheit four hundred fifty one"),
+    ("2001: A Space Odyssey", "two thousand one"),
+    ("The 39 Steps", "thirty nine steps"),
 ])
 def test_normalize_title(raw, expected):
     assert normalize_title(raw) == expected
@@ -53,8 +59,33 @@ def test_wrong_catalogue_year_doesnt_reject_the_real_book():
     assert best_match(pick("Pale Fire", "Vladimir Nabokov", 1962), docs).work_id == "OL627081W"
 
 
-def test_year_breaks_ties_between_matching_works():
-    docs = [doc("Rebecca", ["Daphne du Maurier"], 1980, 300, key="OLreprintW"),
+def test_the_real_work_beats_a_stray_duplicate_with_a_closer_year():
+    # Live Open Library data for q="The Plague"&author="Albert Camus": we used to pick the stray
+    docs = [doc("La Peste", ["Albert Camus"], 1942, 280, key="OL1230715W", edition_title="The Plague"),
+            doc("Collected fiction", ["Albert Camus"], 1960, 7, edition_title="Collected fiction."),
+            doc("Plague", ["Albert Camus"], 1948, 2, key="OL44575184W", edition_title="Plague")]
+    assert best_match(pick("The Plague", "Albert Camus", 1947), docs).work_id == "OL1230715W"
+
+
+def test_numbers_match_spelled_out_titles_and_adaptations_lose():
+    # Live Open Library data for q="1984"&author="George Orwell": we used to pick the adaptation
+    docs = [doc("Nineteen Eighty-Four", ["George Orwell"], 1949, 727, key="OL1168083W", edition_title="Nineteen eighty-four"),
+            doc("1984 (adaptation)", ["Michael Dean", "George Orwell"], 2003, 4, key="OL11326416W", edition_title="1984"),
+            doc("1984 with Connections", ["George Orwell"], 2000, 2, key="OL1168151W", edition_title="1984")]
+    nineteen_eighty_four = pick("1984", "George Orwell", 1949)
+    assert best_match(nineteen_eighty_four, docs).work_id == "OL1168083W"
+    assert display_title(nineteen_eighty_four, docs[0]) == "Nineteen Eighty-Four"
+
+
+def test_co_authored_books_match_either_author_and_the_real_work_wins():
+    # Live: a stray Gaiman-only entry (7 editions) sits next to the real co-written work
+    docs = [doc("Good Omens", ["Neil Gaiman"], 1990, 7, key="OLstrayW"),
+            doc("Good Omens", ["Terry Pratchett", "Neil Gaiman"], 1990, 120, key="OLrealW")]
+    assert best_match(pick("Good Omens", "Neil Gaiman", 1990), docs).work_id == "OLrealW"
+
+
+def test_year_breaks_ties_between_equally_common_works():
+    docs = [doc("Rebecca", ["Daphne du Maurier"], 1980, 200, key="OLreprintW"),
             doc("Rebecca", ["Daphne du Maurier"], 1938, 200, key="OL36633W")]
     assert best_match(pick("Rebecca", "Daphne du Maurier", 1938), docs).work_id == "OL36633W"
 
@@ -140,6 +171,13 @@ def test_parse_description_handles_both_shapes(raw, expected):
     assert parse_description(raw) == expected
 
 
+def test_cover_falls_back_to_the_matched_edition():
+    work = OpenLibraryDoc(key="/works/OL1W", title="Some Book", cover_i=None,
+                          editions=OpenLibraryEditions(docs=[OpenLibraryEdition(title="Some Book", cover_i=777)]))
+    assert work.to_book().cover_id == 777
+    assert work.model_copy(update={"cover_i": 555}).to_book().cover_id == 555  # the work's own cover wins
+
+
 def test_to_book_keeps_a_useful_handful():
     raw = OpenLibraryDoc(key="/works/OL893414W", title="Dune", author_name=["Frank Herbert"], author_key=["OL79034A"],
                          isbn=["0441013597", "9780441013593", "9780340960196"], subject=[f"s{i}" for i in range(50)],
@@ -189,7 +227,7 @@ def test_search_identifies_itself_and_requests_only_the_needed_fields():
     assert found.work_id == "OL893414W"
     assert seen["user_agent"].startswith("PikFlix/1.0 (https://pikflix.app")
     assert seen["params"]["q"] == "Dune" and seen["params"]["author"] == "Frank Herbert"  # q= so edition titles match too
-    assert set(seen["params"]["fields"].split(",")) == {*OpenLibraryDoc.model_fields, "editions.title"}
+    assert set(seen["params"]["fields"].split(",")) == {*OpenLibraryDoc.model_fields, "editions.title", "editions.cover_i"}
 
 
 def failing_service(handler) -> tuple[list, Exception | None]:

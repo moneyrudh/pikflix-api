@@ -15,7 +15,7 @@ from app.schemas import BookPick
 logger = logging.getLogger(__name__)
 
 # `editions` returns the best-matching edition of each work, whose title is in the language searched
-SEARCH_FIELDS = ",".join([*OpenLibraryDoc.model_fields, "editions.title"])
+SEARCH_FIELDS = ",".join([*OpenLibraryDoc.model_fields, "editions.title", "editions.cover_i"])
 SEARCH_LIMIT = 5
 
 # How close a search result must be to Claude's pick to count as the same book. Titles collide
@@ -32,11 +32,34 @@ def _fold(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+         "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+
+
+def _number_words(n: int) -> str:
+    """English words for 0-9999, reading 1100-1999 and 2010-2099 like years ("nineteen eighty four")."""
+    def two(m: int) -> str:
+        return _ONES[m] if m < 20 else _TENS[m // 10] + (f" {_ONES[m % 10]}" if m % 10 else "")
+
+    if n < 100:
+        return two(n)
+    if n < 1000:
+        return f"{_ONES[n // 100]} hundred" + (f" {two(n % 100)}" if n % 100 else "")
+    if 1100 <= n <= 1999 or 2010 <= n <= 2099:
+        rest = n % 100
+        return f"{two(n // 100)} " + ("hundred" if rest == 0 else two(rest) if rest >= 10 else f"oh {_ONES[rest]}")
+    return f"{two(n // 1000)} thousand" + (f" {_number_words(n % 1000)}" if n % 1000 else "")
+
+
 def normalize_title(title: str) -> str:
-    """Comparable form of a title: no subtitle, leading article, punctuation or accents."""
+    """Comparable form of a title: no subtitle, leading article, punctuation or accents, and numbers
+    spelled out, so "1984" matches "Nineteen Eighty-Four"."""
     t = _fold(title).replace("&", "and")
     t = re.split(r"[:(\[]", t, maxsplit=1)[0]   # "Dune: Deluxe Edition" -> "dune"
+    t = re.sub(r"[-\u2010-\u2015]", " ", t)      # hyphens and dashes separate words ("eighty-four")
     t = re.sub(r"[^\w\s]", "", t)
+    t = re.sub(r"\b\d{1,4}\b", lambda m: _number_words(int(m.group())), t)
     t = re.sub(r"^(the|a|an)\s+", "", t.strip())
     return " ".join(t.split())
 
@@ -100,9 +123,11 @@ def best_match(pick: BookPick, docs: List[OpenLibraryDoc]) -> Optional[OpenLibra
     matches = [doc for doc in docs if is_match(pick, doc)]
     if not matches:
         return None
-    # Prefer a year that agrees, then the closest title, then the most editions (Open Library often
-    # has stray duplicate works; the real one has by far the most editions)
-    best = max(matches, key=lambda doc: (_year_agrees(pick, doc), _title_similarity(pick, doc), doc.edition_count or 0))
+    # Most editions first: Open Library has stray duplicates and adaptations (1-7 editions, often no
+    # cover) next to the real work (dozens to hundreds). Author order isn't a signal: co-written books
+    # list either author first (Good Omens). Year only breaks ties, since catalogue years are often
+    # off: La Peste is catalogued as 1942, so a stray "Plague" from 1948 would win on year for a 1947 pick.
+    best = max(matches, key=lambda doc: (doc.edition_count or 0, _year_agrees(pick, doc), _title_similarity(pick, doc)))
     if not _year_agrees(pick, best):
         logger.info("Accepted '%s' despite year %s vs catalogue %s", pick.title, pick.year, best.first_publish_year)
     return best

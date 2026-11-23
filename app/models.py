@@ -235,6 +235,7 @@ class Book(BaseModel):
 
 class OpenLibraryEdition(BaseModel):
     title: Optional[str] = None
+    cover_i: Optional[int] = None
 
 
 class OpenLibraryEditions(BaseModel):
@@ -274,6 +275,8 @@ class OpenLibraryDoc(BaseModel):
         """`title` overrides the work's title, e.g. the English edition title of a translated work."""
         # Popular works list hundreds of ISBNs and subjects; keep a useful handful
         isbns = sorted(self.isbn, key=lambda i: len(i) != 13)[:10]
+        # Some works have no cover of their own while the matched edition does
+        edition_cover = next((e.cover_i for e in (self.editions.docs if self.editions else []) if e.cover_i), None)
         return Book(
             id=self.work_id,
             title=title or self.title,
@@ -281,7 +284,7 @@ class OpenLibraryDoc(BaseModel):
             authors=[Author(name=name, id=key) for name, key in zip(self.author_name, self.author_key)]
                     or [Author(name=name) for name in self.author_name],
             first_publish_year=self.first_publish_year,
-            cover_id=self.cover_i,
+            cover_id=self.cover_i or edition_cover,
             isbns=isbns,
             subjects=self.subject[:10],
             page_count=self.number_of_pages_median,
