@@ -68,7 +68,7 @@ PAPER_CANDIDATES_MAX = 40
 PAPER_RESULTS_SHOWN = 9
 
 # Anthropic API settings
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+ANTHROPIC_MODEL = "claude-haiku-5-5"
 
 # CORS
 CORS_ORIGINS = [

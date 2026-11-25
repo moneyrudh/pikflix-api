@@ -15,6 +15,8 @@ _RECOMMENDATION_BASE = (
     "If the user searched for a specific title or a prompt that warrants less than 9 responses, "
     "smartly recommend the remaining titles that are the closest match.\n"
     "You MUST give exactly 9 recommendations. No more. No less.\n"
+    "When the user asks for titles like one they name, they've usually already seen or read it, so it's "
+    "rarely worth a slot; use your judgement.\n"
     "When the user provides follow-up requests, use the conversation history to understand context "
     "and avoid recommending titles that were already suggested."
 )
@@ -59,6 +61,8 @@ _BOOK_PROMPT = (
     "numbering), the primary author's full name, and the year of first publication, or null if you are unsure. "
     "These are used to look the book up, so accuracy matters more than variety.\n"
     f"You MUST give exactly {BOOK_PICKS_REQUESTED} recommendations. No more. No less.\n"
+    "When the user asks for titles like one they name, they've usually already seen or read it, so it's "
+    "rarely worth a slot; use your judgement.\n"
     "When the user provides follow-up requests, use the conversation history to understand context "
     "and avoid recommending titles that were already suggested."
 )
