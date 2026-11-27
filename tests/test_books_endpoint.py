@@ -12,6 +12,7 @@ from app.services.anthropic_service import get_anthropic_service
 from app.services.openlibrary_service import OpenLibraryError, get_openlibrary_service, lookup_key
 from app.services.supabase_service import get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
+from tests.frontend import FRONTEND
 
 # Claude's 12 picks, in the order it emits them, with each Open Library lookup's delay (seconds).
 # "Cached" is a cache hit; the two "Unverifiable" picks have no matching work.
@@ -69,7 +70,7 @@ def run_book_search() -> tuple[List[dict], FakeAnthropic, FakeOpenLibrary, FakeS
 
     async def post() -> List[dict]:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             response = await client.post("/api/recommendations/", json={"query": "q", "media_types": ["book"]})
         return [json.loads(line) for line in response.text.splitlines()]
 
@@ -133,7 +134,7 @@ def get_books(*paths: str, fail_first: bool = False) -> tuple[List[httpx.Respons
 
     async def run() -> List[httpx.Response]:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             return [await client.get(path) for path in paths]
 
     try:

@@ -4,15 +4,19 @@ Who is making the request. The rest of the app only sees `CurrentUser`; how user
 methods doesn't change anything that depends on `get_current_user`.
 """
 import hashlib
+import hmac
 import logging
 import time
 from functools import cache
-from typing import Dict, Optional, Tuple
+from typing import Awaitable, Callable, Dict, Optional, Tuple
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from gotrue.errors import AuthError
 from pydantic import BaseModel
 
+from app.config import BACKEND_SHARED_SECRET
+from app.services.rate_limit import visitor_key
 from app.services.supabase_service import SupabaseService, get_supabase_service
 
 logger = logging.getLogger(__name__)
@@ -81,3 +85,26 @@ async def get_current_user(
     if user is None:
         raise HTTPException(status_code=401, detail="Sign-in expired or invalid")
     return user
+
+
+# --- The frontend proxy -----------------------------------------------------------------------------------
+# The backend is only meant to be called by the frontend's server-side proxy routes, which add the shared
+# secret and the visitor's IP. Requests without the secret are refused, so nobody can skip the frontend
+# (or claim another visitor's IP) by calling the backend directly.
+
+PROXY_SECRET_HEADER = "X-Pikflix-Proxy-Secret"
+CLIENT_IP_HEADER = "X-Pikflix-Client-Ip"
+
+
+async def require_frontend(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """HTTP middleware: /api requests must carry the shared secret."""
+    if request.url.path.startswith("/api/") and request.method != "OPTIONS":
+        sent = request.headers.get(PROXY_SECRET_HEADER, "")
+        if not hmac.compare_digest(sent.encode(), (BACKEND_SHARED_SECRET or "").encode()):
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+    return await call_next(request)
+
+
+def get_visitor_key(client_ip: Optional[str] = Header(None, alias=CLIENT_IP_HEADER)) -> str:
+    """Who to count a search against: the visitor's IP as forwarded by the frontend, hashed."""
+    return visitor_key(client_ip or "unknown")

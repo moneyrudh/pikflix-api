@@ -19,6 +19,7 @@ from app.models import Book, ChatMessage, ChatSession, Movie, Trailer
 from app.services.anthropic_service import get_anthropic_service
 from app.services.chat_store import get_chat_store
 from app.services.hydrate import get_hydrator
+from tests.frontend import FRONTEND
 
 DUNE = Movie(id=438631, title="Dune", trailer=Trailer(key="n9xhJrPXop4", name="Official Trailer"))
 NO_TRAILER = Movie(id=1, title="No Trailer")
@@ -296,7 +297,7 @@ def post_chat(body: Dict[str, Any], store: FakeStore, signed_in: bool = True) ->
 
     async def run() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             response = await client.post("/api/chat", json=body)
         await asyncio.sleep(0.05)  # the background save
         return response
@@ -342,7 +343,7 @@ def test_chat_requires_sign_in():
 
     async def run():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             return await client.post("/api/chat", json={"message": "hi"})
 
     try:
@@ -358,7 +359,7 @@ def test_get_chat_reopens_it():
 
     async def run():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             return await client.get(f"/api/chats/{CHAT_ID}"), await client.get("/api/chats/bbbbbbbb-0000-0000-0000-000000000002")
 
     try:
@@ -367,3 +368,30 @@ def test_get_chat_reopens_it():
         app.dependency_overrides = {}
     assert mine.status_code == 200 and [t["role"] for t in mine.json()["turns"]] == ["user", "assistant", "user", "assistant"]
     assert other.status_code == 404
+
+
+def test_turn_limits_refuse_before_anything_is_saved(usage_limits):
+    usage_limits.refuse = 12
+    store = FakeStore()
+    response = post_chat({"message": "hi"}, store)
+    assert response.status_code == 429 and response.headers["retry-after"] == "12"
+    assert "12 seconds" in response.json()["detail"]
+    assert store.messages == []  # no chat created, no message saved
+
+
+def test_guests_get_the_lower_daily_cap(usage_limits):
+    from app.config import CHAT_TURNS_PER_DAY_GUEST, CHAT_TURNS_PER_MINUTE
+    post_chat({"message": "hi"}, FakeStore())
+    assert usage_limits == [("chat", ALICE.id, CHAT_TURNS_PER_MINUTE, CHAT_TURNS_PER_DAY_GUEST)]  # ALICE is anonymous
+
+
+def test_a_missing_chat_is_404_without_using_a_turn(usage_limits):
+    response = post_chat({"session_id": "bbbbbbbb-0000-0000-0000-000000000002", "message": "hi"}, FakeStore())
+    assert response.status_code == 404 and usage_limits == []
+
+
+def test_limit_messages():
+    from app.services.rate_limit import limit_message
+    assert limit_message(5 * 3600, "today's chat limit for guests") == \
+        "You've reached today's chat limit for guests. Try again in about 5 hours."
+    assert limit_message(1, "today's search limit") == "You're going a bit fast. Try again in 1 second."
