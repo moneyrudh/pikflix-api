@@ -3,6 +3,8 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.auth import require_frontend
 from app.api.endpoints import books, chat, chats, recommendations, providers
 from app.config import CORS_ORIGINS
 from app.services.anthropic_service import get_anthropic_service
@@ -74,6 +76,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Only the frontend's proxy may call /api (see app/auth.py)
+app.middleware("http")(require_frontend)
 
 # Include routers
 app.include_router(recommendations.router, prefix="/api/recommendations", tags=["recommendations"])

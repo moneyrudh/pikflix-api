@@ -19,6 +19,7 @@ from app.services.semantic_scholar_service import (
 )
 from app.services.supabase_service import get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
+from tests.frontend import FRONTEND
 
 
 def paper(pid: str, title: str = "A Paper", doi: Optional[str] = None, arxiv: Optional[str] = None, **extra) -> S2Paper:
@@ -220,7 +221,7 @@ def run_paper_search(picks: List[str], cache: Optional[FakePaperCache] = None) -
 
     async def post() -> List[dict]:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             response = await client.post("/api/recommendations/", json={"query": "q", "media_types": ["paper"]})
         return [json.loads(line) for line in response.text.splitlines()]
 
@@ -254,7 +255,7 @@ def test_semantic_scholar_outage_says_so_instead_of_blaming_claude():
 
     async def post() -> List[dict]:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             response = await client.post("/api/recommendations/", json={"query": "q", "media_types": ["paper"]})
         return [json.loads(line) for line in response.text.splitlines()]
 

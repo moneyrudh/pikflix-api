@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
-from app.config import BOOK_RESULTS_SHOWN, PAPER_RESULTS_SHOWN
+from app.auth import get_visitor_key
+from app.config import BOOK_RESULTS_SHOWN, PAPER_RESULTS_SHOWN, SEARCHES_PER_DAY, SEARCHES_PER_MINUTE
 from app.models import (
     UserQuery, Book, Movie, Paper, S2Paper, Show, ContentType, ContentTypeMode, MediaType, Shelf,
     InitEvent, ContentEvent, ItemEvent, DoneEvent, ErrorEvent,
@@ -12,6 +13,7 @@ from app.models import (
 from app.schemas import BookPick, ContentRecommendation, PaperPick
 from app.services.anthropic_service import AnthropicService, get_anthropic_service
 from app.services.llm_stream import ParseStats
+from app.services.rate_limit import UsageLimits, get_usage_limits
 from app.services.openlibrary_service import OpenLibraryService, get_openlibrary_service, display_title, lookup_key
 from app.services.semantic_scholar_service import (
     SemanticScholarError, SemanticScholarService, find_candidates, format_candidates, get_semantic_scholar_service,
@@ -119,7 +121,11 @@ async def get_recommendations_stream(
     tmdb_service: TMDBService = Depends(get_tmdb_service),
     openlibrary: OpenLibraryService = Depends(get_openlibrary_service),
     semantic_scholar: SemanticScholarService = Depends(get_semantic_scholar_service),
+    limits: UsageLimits = Depends(get_usage_limits),
+    visitor: str = Depends(get_visitor_key),
 ):
+    # Counted (or refused with a 429) before Claude is called
+    await limits.enforce("search", visitor, SEARCHES_PER_MINUTE, SEARCHES_PER_DAY, "today's search limit")
     reading = query.shelf == Shelf.READ
     papers = query.media_types == [MediaType.PAPER]
     request_mode = None if reading else query.watch_mode

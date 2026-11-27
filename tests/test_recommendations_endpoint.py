@@ -15,6 +15,7 @@ from app.services.anthropic_service import get_anthropic_service
 from app.services.openlibrary_service import get_openlibrary_service
 from app.services.supabase_service import SupabaseService, get_supabase_service
 from app.services.tmdb_service import get_tmdb_service
+from tests.frontend import FRONTEND
 
 # Per-title cache lookup delay (seconds). "Slow" is emitted first but finishes last.
 DELAYS = {"Slow": 0.3, "Fast": 0.0, "Medium": 0.1, "Broken": 0.0}
@@ -46,7 +47,7 @@ class FakeSupabase:
 
 async def post_stream(body: dict) -> List[dict]:
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
         response = await client.post("/api/recommendations/", json=body)
     return [json.loads(line) for line in response.text.splitlines()]
 
@@ -132,3 +133,39 @@ def test_media_types_win_over_legacy_field_and_are_deduped():
 def test_invalid_media_types_are_rejected(media_types, message):
     with pytest.raises(ValidationError, match=message):
         UserQuery(query="q", media_types=media_types)
+
+
+def raw_post(body: dict, headers: dict) -> httpx.Response:
+    async def run() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=headers) as client:
+            return await client.post("/api/recommendations/", json=body)
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Pikflix-Proxy-Secret": "wrong"}])
+def test_requests_not_from_the_frontend_are_refused(headers, usage_limits):
+    response = raw_post({"query": "q"}, headers)
+    assert response.status_code == 403 and usage_limits == []
+
+
+def test_searches_are_counted_per_visitor_without_storing_the_ip(usage_limits):
+    from app.config import SEARCHES_PER_DAY, SEARCHES_PER_MINUTE
+    stream_lines({"query": "q"})
+    [(bucket, key, per_minute, per_day)] = usage_limits
+    assert (bucket, per_minute, per_day) == ("search", SEARCHES_PER_MINUTE, SEARCHES_PER_DAY)
+    assert "203.0.113.7" not in key and len(key) == 64  # a keyed hash of the IP
+
+
+def test_an_over_limit_search_is_refused_before_claude_runs(usage_limits):
+    usage_limits.refuse = 30
+    anthropic = FakeAnthropic()
+    anthropic.get_recommendations = None  # would raise if the endpoint got as far as calling Claude
+    app.dependency_overrides = {get_anthropic_service: lambda: anthropic, get_supabase_service: FakeSupabase,
+                                get_tmdb_service: object, get_openlibrary_service: object}
+    try:
+        response = raw_post({"query": "q"}, FRONTEND)
+    finally:
+        app.dependency_overrides = {}
+    assert response.status_code == 429 and response.headers["retry-after"] == "30"
+    assert response.json()["detail"] == "You're going a bit fast. Try again in 30 seconds."

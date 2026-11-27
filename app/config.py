@@ -17,6 +17,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENLIBRARY_CONTACT = os.getenv("OPENLIBRARY_CONTACT")
 # Optional but needed in production: without it, Semantic Scholar's anonymous tier is shared by everyone and throttled
 SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+# Shared with the frontend's server (never its browser code): every /api request must carry it, so the
+# backend is only reachable through the frontend's proxy routes, which also forward the visitor's IP.
+BACKEND_SHARED_SECRET = os.getenv("BACKEND_SHARED_SECRET")
 
 # Validate required env vars
 _required = {
@@ -24,6 +27,7 @@ _required = {
     "TMDB_READ_ACCESS_TOKEN": TMDB_READ_ACCESS_TOKEN,
     "SUPABASE_URL": SUPABASE_URL,
     "SUPABASE_KEY": SUPABASE_KEY,
+    "BACKEND_SHARED_SECRET": BACKEND_SHARED_SECRET,
 }
 _missing = [name for name, val in _required.items() if not val]
 if _missing:
@@ -56,6 +60,13 @@ BOOK_CACHE_DURATION = 24 * 30  # book metadata is effectively static
 # Agent chats: anonymous users' chats expire after this many days without activity; signed-up users' never do
 ANONYMOUS_CHAT_RETENTION_DAYS = 30
 CHAT_TITLE_MAX_CHARS = 80
+# Usage limits on requests that cost Claude tokens. Chat: per user; guests get a lower daily cap since
+# they're free to create. Search: per visitor IP (searches need no account).
+CHAT_TURNS_PER_MINUTE = 15
+CHAT_TURNS_PER_DAY_GUEST = 50
+CHAT_TURNS_PER_DAY_USER = 200
+SEARCHES_PER_MINUTE = 10
+SEARCHES_PER_DAY = 150
 
 # Books: ask Claude for extra picks so ones that fail verification don't leave the user short
 BOOK_PICKS_REQUESTED = 12

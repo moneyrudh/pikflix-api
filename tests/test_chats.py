@@ -12,6 +12,7 @@ from app.auth import AuthService, CurrentUser, get_auth_service, get_current_use
 from app.main import app
 from app.models import ChatSessionSummary
 from app.services.chat_store import chat_title, get_chat_store
+from tests.frontend import FRONTEND
 
 ALICE = CurrentUser(id="11111111-1111-1111-1111-111111111111", is_anonymous=True)
 ALICES_CHAT = "aaaaaaaa-0000-0000-0000-000000000001"
@@ -110,7 +111,7 @@ def call(method: str, path: str, signed_in: bool = True) -> httpx.Response:
 
     async def run() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=FRONTEND) as client:
             return await client.request(method, path)
 
     try:
